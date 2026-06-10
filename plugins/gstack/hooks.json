@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "name": "gstack-careful",
+        "description": "Destructive command guardrails (gstack /careful, /guard skills). Returns 'ask' decision on rm -rf, DROP TABLE, git push --force, etc.",
+        "type": "command",
+        "matcher": {
+          "tools": ["bash", "shell", "execute"]
+        },
+        "bash": "$HOME/.copilot/skills/gstack/careful/bin/check-careful.sh"
+      },
+      {
+        "name": "gstack-freeze",
+        "description": "Directory scope lock (gstack /freeze, /guard skills). Blocks file edits outside the configured boundary.",
+        "type": "command",
+        "matcher": {
+          "tools": ["edit", "create", "view"]
+        },
+        "bash": "$HOME/.copilot/skills/gstack/freeze/bin/check-freeze.sh"
+      }
+    ]
+  }
+}
