@@ -101,7 +101,8 @@ param(
   [switch]$Force,
   [switch]$RuntimeOnly,
   [switch]$SkipPluginRegister,
-  [string]$BunVersion = ''  # empty = install latest; set to e.g. '1.3.10' to pin
+  [string]$BunVersion = '',  # empty = install latest; set to e.g. '1.3.10' to pin
+  [switch]$WithGbrain        # opt-in: install gbrain CLI + register MCP for semantic memory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -335,29 +336,24 @@ if ($SkipPluginRegister) {
   Write-Ok "If the plugin isn't already installed, run from a fresh terminal:"
   Write-Ok "  copilot plugin marketplace add aviraldua93/gstack-copilot"
   Write-Ok "  copilot plugin install gstack@gstack-copilot"
-  Write-Host ""
-  Write-Step "Done."
-  Write-Ok "Runtime root ready. Plugin register skipped."
-  exit 0
-}
-
-Write-Step "Copilot CLI plugin (gstack)"
-
-# Decide plugin source: local checkout, explicit dir, or clone the shim repo.
-$pluginSource = $null
-
-if ($LocalPlugin) {
-  $localCandidate = Join-Path (Get-Location).Path 'plugin'
-  if (Test-Path (Join-Path $localCandidate 'plugin.json')) {
-    $pluginSource = (Resolve-Path $localCandidate).Path
-    Write-Ok "Using local plugin: $pluginSource"
-  } else {
-    Die "-LocalPlugin set but '$localCandidate\plugin.json' not found. Run from a checkout of gstack-copilot."
-  }
-} elseif (Test-Path (Join-Path (Get-Location).Path 'plugin\plugin.json')) {
-  $pluginSource = (Resolve-Path (Join-Path (Get-Location).Path 'plugin')).Path
-  Write-Ok "Detected local plugin checkout: $pluginSource"
 } else {
+  Write-Step "Copilot CLI plugin (gstack)"
+
+  # Decide plugin source: local checkout, explicit dir, or clone the shim repo.
+  $pluginSource = $null
+
+  if ($LocalPlugin) {
+    $localCandidate = Join-Path (Get-Location).Path 'plugin'
+    if (Test-Path (Join-Path $localCandidate 'plugin.json')) {
+      $pluginSource = (Resolve-Path $localCandidate).Path
+      Write-Ok "Using local plugin: $pluginSource"
+    } else {
+      Die "-LocalPlugin set but '$localCandidate\plugin.json' not found. Run from a checkout of gstack-copilot."
+    }
+  } elseif (Test-Path (Join-Path (Get-Location).Path 'plugin\plugin.json')) {
+    $pluginSource = (Resolve-Path (Join-Path (Get-Location).Path 'plugin')).Path
+    Write-Ok "Detected local plugin checkout: $pluginSource"
+  } else {
   # Clone the plugin shim repo
   $parent = Split-Path $PluginDir -Parent
   if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
@@ -418,6 +414,72 @@ if ($alreadyInstalled) {
   }
   if ($ins.Output) { $ins.Output -split "`r?`n" | ForEach-Object { Write-Host "      $_" } }
 }
+}  # close: if ($SkipPluginRegister) {...} else {...}
+
+# --- Gbrain (opt-in) ---------------------------------------------------------
+# Gbrain (https://github.com/garrytan/gbrain) is Garry Tan's persistent semantic
+# memory layer for AI agents. With -WithGbrain we install the gbrain CLI, init a
+# local PGLite brain (no Docker, no API key), and register it with Copilot CLI
+# as an MCP server. After this your /gstack-* skills can read/write persistent
+# context across sessions.
+#
+# Once garrytan/gbrain#1998 (Copilot embedding provider) merges, embeddings
+# come free with your Copilot subscription — no separate OpenAI/Voyage key.
+if ($WithGbrain) {
+  Write-Step "Gbrain (semantic memory for /gstack-* skills)"
+  if (Test-Command gbrain) {
+    Write-Ok "gbrain already on PATH: $(gbrain --version 2>$null | Select-Object -First 1)"
+  } else {
+    Write-Warn2 "gbrain not found — installing via bun"
+    Invoke-Bash -Cwd $HOME -Command "bun install -g github:garrytan/gbrain"
+    # gbrain installs to ~/.bun/bin
+    $bunBin = Join-Path $HOME '.bun\bin'
+    if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $bunBin })) {
+      $env:PATH = "$bunBin;$env:PATH"
+    }
+    if (Test-Command gbrain) {
+      Write-Ok "gbrain installed: $(gbrain --version 2>$null | Select-Object -First 1)"
+    } else {
+      Write-Bad "gbrain install reported success but binary not on PATH"
+      Write-Warn2 "Continuing without gbrain — skip with -WithGbrain:`$false to suppress this section."
+    }
+  }
+
+  # Init local PGLite brain if not already
+  $gbrainConfig = Join-Path $HOME '.gbrain\config.json'
+  if (Test-Path $gbrainConfig) {
+    Write-Ok "gbrain already initialized at ~/.gbrain/"
+  } else {
+    Write-Warn2 "Initializing gbrain with local PGLite (2 sec, no Docker, no API key)"
+    Invoke-Bash -Cwd $HOME -Command "gbrain init --pglite --non-interactive 2>&1 || echo 'gbrain init exit '`$?"
+    if (Test-Path $gbrainConfig) {
+      Write-Ok "gbrain initialized at $gbrainConfig"
+    } else {
+      Write-Warn2 "gbrain init did not produce ~/.gbrain/config.json — check 'gbrain doctor' manually"
+    }
+  }
+
+  # Register MCP server with Copilot CLI (if not already registered + no session lock)
+  if ($SkipPluginRegister) {
+    Write-Warn2 "Skipping 'copilot mcp add gbrain' (active Copilot session locks settings.json)."
+    Write-Warn2 "Run from a fresh terminal: copilot mcp add gbrain -- gbrain serve"
+  } else {
+    $mcpList = Invoke-Capture -File 'copilot' -Args @('mcp','list')
+    if ($mcpList.Output -match '\bgbrain\b') {
+      Write-Ok "gbrain MCP already registered with Copilot CLI"
+    } else {
+      Write-Ok "Registering gbrain as MCP server in Copilot CLI"
+      $mcpAdd = Invoke-Capture -File 'copilot' -Args @('mcp','add','gbrain','--','gbrain','serve')
+      if ($mcpAdd.ExitCode -eq 0) {
+        Write-Ok "gbrain MCP registered"
+        Write-Ok "  Try: in copilot session, ask 'search gbrain for X'"
+      } else {
+        Write-Warn2 "copilot mcp add gbrain failed (exit $($mcpAdd.ExitCode))"
+        Write-Warn2 "  Manual: copilot mcp add gbrain -- gbrain serve"
+      }
+    }
+  }
+}
 
 # --- Verify ------------------------------------------------------------------
 if (-not $NoVerify) {
@@ -471,6 +533,13 @@ Write-Host "  3. Try one:"
 Write-Host "       review this pr" -ForegroundColor White
 Write-Host "       investigate this bug" -ForegroundColor White
 Write-Host "       office hours" -ForegroundColor White
+if (-not $WithGbrain) {
+  Write-Host ""
+  Write-Host "Optional: add semantic memory (gbrain) for cross-session context:" -ForegroundColor Yellow
+  Write-Host "       .\install.ps1 -WithGbrain -RuntimeOnly" -ForegroundColor White
+  Write-Host "  Gbrain is Garry Tan's persistent knowledge base for AI agents (22k stars)." -ForegroundColor Yellow
+  Write-Host "  Soon: garrytan/gbrain#1998 lets you use Copilot's embeddings for free." -ForegroundColor Yellow
+}
 Write-Host ""
 Write-Host "Upgrade later with: .\install.ps1 -Force" -ForegroundColor Cyan
 Write-Host "Uninstall with:     .\uninstall.ps1" -ForegroundColor Cyan

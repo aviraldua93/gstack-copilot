@@ -1677,7 +1677,7 @@ On any Codex error, fall back to the Claude adversarial subagent.
 
 **If CODEX_NOT_AVAILABLE (or Codex errored):**
 
-Dispatch via the Agent tool. The subagent has fresh context — genuine independence.
+Dispatch via the `task` tool. The subagent has fresh context — genuine independence.
 
 Subagent prompt: same plan review prompt as above.
 

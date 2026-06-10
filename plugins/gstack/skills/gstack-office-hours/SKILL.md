@@ -1273,7 +1273,7 @@ On any Codex error, fall back to the Claude subagent below.
 
 **If CODEX_NOT_AVAILABLE (or Codex errored):**
 
-Dispatch via the Agent tool. The subagent has fresh context — genuine independence.
+Dispatch via the `task` tool. The subagent has fresh context — genuine independence.
 
 Subagent prompt: same mode-appropriate prompt as above (Startup or Builder variant).
 
@@ -1707,7 +1707,7 @@ Before presenting the document to the user for approval, run an adversarial revi
 
 **Step 1: Dispatch reviewer subagent**
 
-Use the Agent tool to dispatch an independent reviewer. The reviewer has fresh context
+Use the `task` tool to dispatch an independent reviewer. The reviewer has fresh context
 and cannot see the brainstorming conversation — only the document. This ensures genuine
 adversarial independence.
 

@@ -1219,7 +1219,7 @@ When a finding is VERIFIED, search the entire codebase for the same vulnerabilit
 
 **Parallel Finding Verification:**
 
-For each candidate finding, launch an independent verification sub-task using the Agent tool. The verifier has fresh context and cannot see the initial scan's reasoning — only the finding itself and the FP filtering rules.
+For each candidate finding, launch an independent verification sub-task using the `task` tool. The verifier has fresh context and cannot see the initial scan's reasoning — only the finding itself and the FP filtering rules.
 
 Prompt each verifier with:
 - The file path and line number ONLY (avoid anchoring)
@@ -1228,7 +1228,7 @@ Prompt each verifier with:
 
 Launch all verifiers in parallel. Discard findings where the verifier scores below 8 (daily mode) or below 2 (comprehensive mode).
 
-If the Agent tool is unavailable, self-verify by re-reading code with a skeptic's eye. Note: "Self-verified — independent sub-task unavailable."
+If the `task` tool is unavailable, self-verify by re-reading code with a skeptic's eye. Note: "Self-verified — independent sub-task unavailable."
 
 ### Phase 13: Findings Report + Trend Tracking + Remediation
 

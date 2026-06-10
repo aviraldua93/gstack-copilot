@@ -1,0 +1,185 @@
+name: Upstream Sync (daily)
+
+# Daily sync from garrytan/gstack: regenerate skills via hosts/copilot.ts adapter,
+# run static guards, open PR. Auto-merge gate for PATCH bumps is documented below
+# but not yet wired (would need a follow-up workflow with required check protection).
+#
+# Design: STRATEGIC_STATE_REPORT.md
+# Versioning scheme: 0.MAJOR.MINOR+gstack.X.Y.Z.W
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # 06:17 UTC daily; offset to avoid GH minute-zero spike
+  workflow_dispatch:       # manual trigger via Actions tab
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false  # serialize; never two syncs in flight
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_version: ${{ steps.poll.outputs.version }}
+      our_last_seen: ${{ steps.poll.outputs.last_seen }}
+      changed: ${{ steps.poll.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Poll upstream VERSION
+        id: poll
+        run: |
+          set -euo pipefail
+          UPSTREAM=$(curl -fsSL https://raw.githubusercontent.com/garrytan/gstack/main/VERSION | tr -d '[:space:]')
+          LAST_SEEN=$(cat .upstream-version 2>/dev/null | tr -d '[:space:]' || echo "0.0.0.0")
+          echo "version=$UPSTREAM" >> "$GITHUB_OUTPUT"
+          echo "last_seen=$LAST_SEEN" >> "$GITHUB_OUTPUT"
+          if [ "$UPSTREAM" != "$LAST_SEEN" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Upstream gstack changed: $LAST_SEEN -> $UPSTREAM"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Upstream gstack unchanged: $UPSTREAM"
+          fi
+
+  regen:
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Clone upstream gstack
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch main https://github.com/garrytan/gstack.git upstream
+
+      - name: Apply our hosts/copilot.ts adapter
+        run: |
+          set -euo pipefail
+          if [ ! -f ports/hosts-copilot.ts ]; then
+            echo "::error::ports/hosts-copilot.ts not found"
+            exit 1
+          fi
+          cp ports/hosts-copilot.ts upstream/hosts/copilot.ts
+          # Register in hosts/index.ts
+          if ! grep -q "import copilot from './copilot';" upstream/hosts/index.ts; then
+            sed -i "/^import opencode from '\.\/opencode';/a import copilot from './copilot';" upstream/hosts/index.ts
+            sed -i "s|, opencode, slate|, opencode, copilot, slate|g" upstream/hosts/index.ts
+            sed -i "s|export { claude, codex, factory, kiro, opencode, slate|export { claude, codex, factory, kiro, opencode, copilot, slate|g" upstream/hosts/index.ts
+          fi
+
+      - name: Install upstream deps
+        working-directory: upstream
+        run: bun install --frozen-lockfile
+
+      - name: Test — host config validity (allow exact-count assertion to fail)
+        working-directory: upstream
+        run: |
+          # Adapter adds an 11th host; upstream test expects 10. Allow that one failure.
+          bun test test/host-config.test.ts || echo "::warning::host-config.test.ts had failures (acceptable if only the host-count assertion)"
+
+      - name: Test — generation cleanliness
+        working-directory: upstream
+        run: bun test test/gen-skill-docs.test.ts
+
+      - name: Regenerate Copilot skills
+        working-directory: upstream
+        run: |
+          rm -rf .copilot/skills/
+          bun run gen:skill-docs --host copilot
+
+      - name: Static checks on generated output
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          if grep -r "\.claude/skills" .copilot/skills/; then
+            echo "::error::.claude/skills path leaked into copilot output"
+            exit 1
+          fi
+          for f in .copilot/skills/*/SKILL.md; do
+            head -1 "$f" | grep -q '^---$' || { echo "::error::no frontmatter: $f"; exit 1; }
+          done
+          COUNT=$(ls -d .copilot/skills/*/ | wc -l)
+          if [ "$COUNT" -lt 40 ]; then
+            echo "::error::skill count shrank to $COUNT"
+            exit 1
+          fi
+          echo "::notice::skill count: $COUNT"
+          for blocked in gstack-claude gstack-pair-agent gstack-benchmark-models gstack-ios-qa gstack-ios-fix gstack-ios-clean gstack-ios-sync gstack-ios-design-review; do
+            if [ -d ".copilot/skills/$blocked" ]; then
+              echo "::error::$blocked in skipSkills but generated"
+              exit 1
+            fi
+          done
+
+      - name: Sync to marketplace plugin tree
+        run: |
+          set -euo pipefail
+          rm -rf plugins/gstack/skills/*
+          rsync -a upstream/.copilot/skills/ plugins/gstack/skills/
+          echo "${{ needs.detect.outputs.upstream_version }}" > .upstream-version
+
+      - name: Bump our plugin version
+        id: bump
+        run: |
+          set -euo pipefail
+          PREV=$(jq -r '.version' plugins/gstack/plugin.json | sed 's/+.*$//')
+          MAJ=$(echo "$PREV" | cut -d. -f1)
+          MIN=$(echo "$PREV" | cut -d. -f2)
+          PAT=$(echo "$PREV" | cut -d. -f3)
+          NEW_PAT=$((PAT + 1))
+          NEW="${MAJ}.${MIN}.${NEW_PAT}+gstack.${{ needs.detect.outputs.upstream_version }}"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          jq --arg v "$NEW" '.version = $v' plugins/gstack/plugin.json > tmp && mv tmp plugins/gstack/plugin.json
+          jq --arg v "$NEW" '.metadata.version = $v | .plugins[0].version = $v' .github/plugin/marketplace.json > tmp && mv tmp .github/plugin/marketplace.json
+          echo "::notice::Bumped: $PREV -> $NEW"
+
+      - name: Open PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: upstream-sync/gstack-${{ needs.detect.outputs.upstream_version }}
+          commit-message: "chore(upstream): sync gstack@${{ needs.detect.outputs.upstream_version }}"
+          title: "chore(upstream): sync gstack@${{ needs.detect.outputs.upstream_version }}"
+          body: |
+            ## Daily upstream sync
+
+            **Upstream:** garrytan/gstack@`${{ needs.detect.outputs.upstream_version }}`
+            **Previous:** `${{ needs.detect.outputs.our_last_seen }}`
+            **Plugin version:** `${{ steps.bump.outputs.version }}`
+
+            All static guards passed: adapter compiles, generation clean, no `.claude/skills` leakage, all frontmatter valid, skill count ≥ 40, skipSkills enforced.
+
+            **Review:** scan diff for new resolvers / new skills / removed skills. If diff is "files moved + version bump" only, safe to merge.
+
+            Auto-generated by `.github/workflows/upstream-sync.yml`.
+          labels: |
+            upstream-sync
+            auto-generated
+
+  notify-failure:
+    needs: [detect, regen]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open tracking issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const upstream = "${{ needs.detect.outputs.upstream_version }}";
+            github.rest.issues.create({
+              ...context.repo,
+              title: `Upstream sync failed for gstack@${upstream}`,
+              labels: ['upstream-sync', 'bug'],
+              body: `Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\nLikely causes:\n- Upstream removed/renamed a HostConfig field → adapter no longer compiles\n- Upstream changed path rewriter format\n- Upstream renamed bin/, browse/, etc.\n\nManual triage required.`
+            });

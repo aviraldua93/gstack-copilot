@@ -56,9 +56,34 @@ This installs Bun, builds gstack binaries from upstream, copies runtime assets
 to `~/.copilot/skills/gstack/`, then downloads Playwright Chromium last (so a
 Playwright failure won't strand the runtime).
 
+### Optional: add Gbrain (persistent semantic memory)
+
+[Gbrain](https://github.com/garrytan/gbrain) (22k stars) is Garry Tan's
+persistent knowledge base for AI agents. With Gbrain installed and registered
+as an MCP server, your `/gstack-*` skills can read and write durable context
+across sessions — past plans, decisions, retros, and code-symbol search.
+
+```powershell
+# Windows (after running install.ps1 once):
+pwsh -ExecutionPolicy Bypass -File .\install.ps1 -RuntimeOnly -WithGbrain
+```
+
+The installer downloads gbrain via `bun install -g github:garrytan/gbrain`,
+initializes a local PGLite brain (2 seconds, no Docker, no API key), and
+registers it with Copilot CLI via `copilot mcp add gbrain -- gbrain serve`.
+
+**Watching:** [garrytan/gbrain#1998](https://github.com/garrytan/gbrain/pull/1998)
+adds a native Copilot embedding provider. Once merged, gbrain embeddings come
+free with your GitHub Copilot subscription — no separate OpenAI/Voyage API key.
+
 ---
 
-## What's included (53 skills)
+## What's included (45 skills after Windows-aware filtering)
+
+The host adapter (`hosts/copilot.ts`) excludes 8 skills that are broken on
+Copilot CLI Windows: `claude` (needs claude binary), `pair-agent` (needs
+ngrok + remote target), `benchmark-models` (needs cross-model CLIs), and all
+5 `ios-*` (need macOS + Xcode + iPhone over USB).
 
 ### Plan-mode reviews
 
