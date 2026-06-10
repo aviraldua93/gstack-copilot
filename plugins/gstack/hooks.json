@@ -9,7 +9,7 @@
         "matcher": {
           "tools": ["bash", "shell", "execute"]
         },
-        "bash": "$HOME/.copilot/skills/gstack/careful/bin/check-careful.sh"
+        "bash": "${CLAUDE_PLUGIN_ROOT:-$HOME/.copilot/installed-plugins/_direct/plugin}/hooks/check-careful.sh"
       },
       {
         "name": "gstack-freeze",
@@ -18,7 +18,7 @@
         "matcher": {
           "tools": ["edit", "create", "view"]
         },
-        "bash": "$HOME/.copilot/skills/gstack/freeze/bin/check-freeze.sh"
+        "bash": "${CLAUDE_PLUGIN_ROOT:-$HOME/.copilot/installed-plugins/_direct/plugin}/hooks/check-freeze.sh"
       }
     ]
   }

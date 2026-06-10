@@ -33,15 +33,28 @@ copilot plugin list
 
 For browser-dependent skills (`browse`, `qa`, `design-review`, `canary`,
 `scrape`, `make-pdf`), you also need the runtime binaries. Run the one-shot
-installer (Windows-first; mac/Linux equivalent in `install.sh`):
+installer with **PowerShell 7+** (`pwsh`, not the default Windows PowerShell 5.1):
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/aviraldua93/gstack-copilot/main/install.ps1 -OutFile install.ps1
-.\install.ps1
+pwsh -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-This installs Bun, builds gstack binaries from upstream, downloads Playwright
-Chromium, and copies runtime assets to `~/.copilot/skills/gstack/`.
+If you've already installed the plugin via the marketplace path above, use
+`-RuntimeOnly` to skip the redundant plugin register step:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File .\install.ps1 -RuntimeOnly
+```
+
+On macOS / Linux:
+```bash
+curl -fsSL https://raw.githubusercontent.com/aviraldua93/gstack-copilot/main/install.sh | bash
+```
+
+This installs Bun, builds gstack binaries from upstream, copies runtime assets
+to `~/.copilot/skills/gstack/`, then downloads Playwright Chromium last (so a
+Playwright failure won't strand the runtime).
 
 ---
 

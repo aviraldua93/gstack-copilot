@@ -1,20 +1,38 @@
+#Requires -Version 7.0
 <#
 .SYNOPSIS
-  One-command installer for gstack-on-Copilot-CLI (Windows).
+  One-command installer for gstack-on-Copilot-CLI (Windows). Requires PowerShell 7.0+.
 
 .DESCRIPTION
   Installs gstack (Garry Tan's engineering workflow skills) as a
   GitHub Copilot CLI plugin.
 
+  On Windows PowerShell 5.1 (the default `powershell.exe`), this script will
+  refuse to run with a clear error. Use `pwsh` (PowerShell 7+) instead.
+
   Steps performed:
     1. Preflight (git, copilot, node)
-    2. Install Bun if missing (pinned, checksum-verified install script)
+    2. Install Bun if missing (latest from bun.sh — see -BunVersion to pin)
     3. Clone or update gstack upstream at ~/.claude/skills/gstack
     4. bun install + bun run build (via Git Bash on Windows)
-    5. Install Playwright Chromium (Node.js launcher used on Windows)
-    6. Clone the Copilot plugin shim (this repo) to ~/.gstack-copilot
-    7. Register the plugin with Copilot CLI
-    8. Verify
+    5. Copy runtime root to ~/.copilot/skills/gstack (bin/, browse, design, hooks)
+    6. Install Playwright Chromium (Node.js launcher used on Windows)
+    7. Clone the Copilot plugin shim (this repo) to ~/.gstack-copilot
+    8. Register the plugin with Copilot CLI (skipped with -RuntimeOnly)
+    9. Verify
+
+  Step ordering: runtime root copy (step 5) is intentionally BEFORE Playwright
+  (step 6) so a Playwright failure doesn't strand the runtime install.
+
+.PARAMETER RuntimeOnly
+  Skip the Copilot plugin register/update step. Useful when the plugin was
+  already installed via the marketplace path:
+    copilot plugin marketplace add aviraldua93/gstack-copilot
+    copilot plugin install gstack@gstack-copilot
+  Then run this script with -RuntimeOnly to add the runtime binaries.
+
+.PARAMETER SkipPluginRegister
+  Alias for -RuntimeOnly with a clearer name.
 
 .PARAMETER UpstreamRepo
   Git URL of upstream gstack. Default: https://github.com/garrytan/gstack.git
@@ -80,13 +98,17 @@ param(
   [switch]$SkipPlaywright,
   [switch]$SkipBun,
   [switch]$NoVerify,
-  [switch]$Force
+  [switch]$Force,
+  [switch]$RuntimeOnly,
+  [switch]$SkipPluginRegister,
+  [string]$BunVersion = ''  # empty = install latest; set to e.g. '1.3.10' to pin
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # speeds up Invoke-WebRequest
 
-$BunPinnedVersion = '1.3.10'  # matches gstack-upstream/setup line 9
+# Treat both flags identically.
+$SkipPluginRegister = $SkipPluginRegister -or $RuntimeOnly
 
 # --- Output helpers ----------------------------------------------------------
 function Write-Step  { param($Msg) Write-Host "==> $Msg" -ForegroundColor Cyan }
@@ -154,15 +176,14 @@ function Invoke-Bash {
 Write-Step "gstack-on-Copilot-CLI installer (Windows)"
 Write-Host ""
 
-if ($env:COPILOT_CLI -eq '1') {
-  Write-Bad "You are running this inside an active Copilot CLI session."
-  Write-Bad "Copilot CLI holds an exclusive lock on ~/.copilot/settings.json,"
-  Write-Bad "so 'copilot plugin install' will fail with EPERM."
-  Write-Host ""
-  Write-Host "  Open a FRESH terminal (cmd, PowerShell, or Windows Terminal)" -ForegroundColor Yellow
-  Write-Host "  and re-run the installer from there." -ForegroundColor Yellow
-  exit 2
-}
+# --- Preflight ---------------------------------------------------------------
+Write-Step "gstack-on-Copilot-CLI installer (Windows)"
+Write-Host ""
+
+# Fix #1: COPILOT_CLI check moved DOWN to the plugin-register block.
+# Runtime work (Bun, clone, build, Playwright, runtime root copy) does NOT
+# touch ~/.copilot/settings.json, so it should not be blocked by the session
+# lock guard. Only the actual plugin install/uninstall steps need the guard.
 
 Write-Step "Preflight"
 if (-not (Test-Command git))     { Die "git not found. Install Git for Windows: https://git-scm.com/download/win" }
@@ -173,10 +194,15 @@ Write-Ok ("copilot  : " + ((copilot --version) -split "`r?`n")[0])
 Write-Ok ("node     : " + (node --version))
 $gitBash = Get-GitBash
 Write-Ok ("git-bash : " + $gitBash)
+if ($env:COPILOT_CLI -eq '1') {
+  Write-Warn2 "Detected COPILOT_CLI=1. Runtime install will run; plugin register will be skipped (Copilot session holds settings.json lock)."
+  $SkipPluginRegister = $true
+}
 
 # --- Bun ---------------------------------------------------------------------
 if (-not $SkipBun) {
-  Write-Step "Bun (pinned v$BunPinnedVersion)"
+  $bunLabel = if ($BunVersion) { "v$BunVersion" } else { "latest" }
+  Write-Step "Bun ($bunLabel)"
   if (Test-Command bun) {
     $bunVer = (bun --version).Trim()
     Write-Ok "bun $bunVer already on PATH"
@@ -232,22 +258,8 @@ if (-not $SkipUpstream) {
   Invoke-Bash -Cwd $InstallDir -Command "bun run build"
   Write-Ok "Build complete"
 
-  # --- Playwright Chromium ---------------------------------------------------
-  if (-not $SkipPlaywright) {
-    Write-Step "Playwright Chromium"
-    Invoke-Bash -Cwd $InstallDir -Command "bunx playwright install chromium"
-
-    # On Windows, Bun cannot launch Chromium due to oven-sh/bun#4253.
-    # Node has to be able to require('playwright') from the install dir.
-    Write-Ok "Verifying Node.js can load Playwright (Windows-specific)"
-    Invoke-Bash -Cwd $InstallDir -Command "node -e `"require('playwright')`" 2>/dev/null || npm install --no-save playwright"
-    Invoke-Bash -Cwd $InstallDir -Command "node -e `"require('@ngrok/ngrok')`" 2>/dev/null || npm install --no-save @ngrok/ngrok || true"
-    Write-Ok "Playwright Chromium ready"
-  } else {
-    Write-Step "Skipping Playwright (--SkipPlaywright)"
-  }
-
   # --- Copilot runtime root ----------------------------------------------------
+  # (Fix #6 reorder: runtime root copy is BEFORE Playwright now.)
   # Skills generated by gstack's hosts/copilot.ts adapter reference paths under
   # ~/.copilot/skills/gstack/ (e.g. for bin/, browse/dist/, browse/src/, design/).
   # Copy the runtime assets from the upstream install so preambles + binaries resolve.
@@ -281,11 +293,54 @@ echo "OK: runtime root populated at `$DST"
 "@
   Invoke-Bash -Cwd $InstallDir -Command $copilotRuntimeCmd
   Write-Ok "Copilot runtime root ready at $copilotGstack"
+
+  # --- Playwright Chromium ---------------------------------------------------
+  # (Fix #6: wrapped in try/catch so a Playwright failure DOES NOT strand the
+  # runtime install. Runtime root is already populated above; browser skills
+  # will just be unavailable until the user resolves Playwright.)
+  if (-not $SkipPlaywright) {
+    Write-Step "Playwright Chromium"
+    try {
+      Invoke-Bash -Cwd $InstallDir -Command "bunx playwright install chromium"
+
+      # On Windows, Bun cannot launch Chromium due to oven-sh/bun#4253.
+      # Node has to be able to require('playwright') from the install dir.
+      # Use `npm.cmd` (not bare `npm`) so Git Bash on Windows finds the shim
+      # without depending on PATHEXT resolution. See:
+      # https://github.com/aviraldua93/gstack-copilot/issues/6
+      Write-Ok "Verifying Node.js can load Playwright (Windows-specific)"
+      Invoke-Bash -Cwd $InstallDir -Command "node -e `"require('playwright')`" 2>/dev/null || npm.cmd install --no-save playwright"
+      Invoke-Bash -Cwd $InstallDir -Command "node -e `"require('@ngrok/ngrok')`" 2>/dev/null || npm.cmd install --no-save @ngrok/ngrok || true"
+      Write-Ok "Playwright Chromium ready"
+    } catch {
+      Write-Bad "Playwright install failed: $($_.Exception.Message)"
+      Write-Warn2 "Runtime root is already populated. Non-browser skills work."
+      Write-Warn2 "To enable browser skills (qa, browse, canary, scrape):"
+      Write-Warn2 "  cd $InstallDir; bunx playwright install chromium; npm.cmd install --no-save playwright"
+    }
+  } else {
+    Write-Step "Skipping Playwright (--SkipPlaywright)"
+  }
 } else {
   Write-Step "Skipping upstream install (--SkipUpstream)"
 }
 
 # --- Copilot CLI plugin ------------------------------------------------------
+# Fix #2: -RuntimeOnly / -SkipPluginRegister skip this block entirely.
+# Fix #1: COPILOT_CLI auto-sets $SkipPluginRegister in preflight, so this
+# also auto-skips when running inside an active Copilot session.
+if ($SkipPluginRegister) {
+  Write-Step "Copilot CLI plugin (gstack) — SKIPPED"
+  Write-Ok "Skipping plugin register/update (-RuntimeOnly or -SkipPluginRegister or active Copilot session)."
+  Write-Ok "If the plugin isn't already installed, run from a fresh terminal:"
+  Write-Ok "  copilot plugin marketplace add aviraldua93/gstack-copilot"
+  Write-Ok "  copilot plugin install gstack@gstack-copilot"
+  Write-Host ""
+  Write-Step "Done."
+  Write-Ok "Runtime root ready. Plugin register skipped."
+  exit 0
+}
+
 Write-Step "Copilot CLI plugin (gstack)"
 
 # Decide plugin source: local checkout, explicit dir, or clone the shim repo.
