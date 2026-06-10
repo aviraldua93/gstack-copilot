@@ -1,0 +1,12 @@
+{
+  "name": "gstack",
+  "description": "Garry Tan's gstack — opinionated CEO/Eng/Design/QA/Release engineering workflow as Copilot CLI skills. Ported from Claude Code.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Aviral Dua (port)",
+    "email": "aviraldua@microsoft.com"
+  },
+  "license": "MIT",
+  "keywords": ["workflow", "engineering", "review", "qa", "ship", "planning"],
+  "skills": "skills/"
+}

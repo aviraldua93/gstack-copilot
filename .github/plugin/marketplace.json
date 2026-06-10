@@ -1,0 +1,40 @@
+{
+  "name": "gstack-copilot",
+  "owner": {
+    "name": "Aviral Dua",
+    "email": "aviraldua@microsoft.com"
+  },
+  "metadata": {
+    "description": "Garry Tan's gstack engineering workflow — CEO/Eng/Design/QA/Release skills — ported from Claude Code to GitHub Copilot CLI.",
+    "version": "0.2.0",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "gstack",
+      "source": "gstack",
+      "description": "Opinionated CEO/Eng/Design/QA/Release engineering workflow as Copilot CLI skills. 15 skills: review, investigate, autoplan, plan-ceo-review, plan-eng-review, office-hours, retro, health, careful, guard, browse, canary, design-review, qa, scrape.",
+      "version": "0.2.0",
+      "author": {
+        "name": "Aviral Dua (port)",
+        "email": "aviraldua@microsoft.com",
+        "url": "https://github.com/aviraldua93"
+      },
+      "homepage": "https://github.com/aviraldua93/gstack-copilot",
+      "repository": "https://github.com/aviraldua93/gstack-copilot",
+      "license": "MIT",
+      "keywords": [
+        "workflow",
+        "engineering",
+        "review",
+        "qa",
+        "ship",
+        "planning",
+        "gstack",
+        "code-review",
+        "retrospective",
+        "debugging"
+      ]
+    }
+  ]
+}

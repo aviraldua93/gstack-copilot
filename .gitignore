@@ -1,0 +1,14 @@
+# Editor / OS scratch
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# Node / Bun (only used by the bundled `browse` skill sidecar — generated, never committed)
+node_modules/
+dist/
+*.log
+.bun/
+bun.lockb
