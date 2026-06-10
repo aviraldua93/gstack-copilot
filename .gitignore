@@ -12,3 +12,6 @@ dist/
 *.log
 .bun/
 bun.lockb
+
+# Workflow-only transient clone (upstream-sync.yml)
+upstream/
