@@ -1,12 +1,15 @@
 {
   "name": "gstack",
-  "description": "Garry Tan's gstack — opinionated CEO/Eng/Design/QA/Release engineering workflow as Copilot CLI skills. Ported from Claude Code.",
+  "description": "Garry Tan's gstack — opinionated CEO/Eng/Design/QA/Release engineering workflow as Copilot CLI skills. 53 skills, auto-generated via gstack's official 'hosts/copilot.ts' adapter. Original work by Garry Tan (https://github.com/garrytan/gstack), MIT licensed. Port maintained by @aviraldua93.",
   "version": "0.2.0",
   "author": {
-    "name": "Aviral Dua (port)",
-    "email": "aviraldua@microsoft.com"
+    "name": "Aviral Dua (port maintainer)",
+    "email": "aviraldua@microsoft.com",
+    "url": "https://github.com/aviraldua93"
   },
+  "homepage": "https://github.com/aviraldua93/gstack-copilot",
+  "repository": "https://github.com/aviraldua93/gstack-copilot",
   "license": "MIT",
-  "keywords": ["workflow", "engineering", "review", "qa", "ship", "planning"],
+  "keywords": ["workflow", "engineering", "review", "qa", "ship", "planning", "ceo", "gstack"],
   "skills": "skills/"
 }

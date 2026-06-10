@@ -1,0 +1,15 @@
+gstack-copilot (GitHub Copilot CLI port)
+========================================
+
+This plugin is a port of gstack to GitHub Copilot CLI.
+
+Original work: gstack by Garry Tan
+  https://github.com/garrytan/gstack
+  Licensed under MIT
+
+This port uses gstack's built-in 'hosts/copilot.ts' adapter system
+to regenerate SKILL.md files for the Copilot CLI environment via
+'bun run gen:skill-docs --host copilot'. No SKILL.md content is
+modified by hand.
+
+Port maintainer: Aviral Dua (Microsoft)
