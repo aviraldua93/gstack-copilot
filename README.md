@@ -1,7 +1,7 @@
 # gstack for GitHub Copilot CLI
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Skills: 53](https://img.shields.io/badge/skills-53-blue)](#whats-included)
+[![Skills: 45](https://img.shields.io/badge/skills-45-blue)](#whats-included)
 [![Tested: 27/27](https://img.shields.io/badge/stress--tested-27%2F27-brightgreen)](STRESS_TEST_REPORT.md)
 
 A port of [garrytan/gstack](https://github.com/garrytan/gstack) — Garry Tan's
@@ -9,9 +9,15 @@ opinionated CEO / Eng / Design / QA / Release engineering workflow — to
 [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli)
 plugin format.
 
-**All 53 skills auto-generated** via gstack's official `hosts/copilot.ts`
-adapter system — no hand-porting, no drift. Stress-tested end-to-end on
-Windows: see [STRESS_TEST_REPORT.md](STRESS_TEST_REPORT.md).
+**All 45 shipped skills auto-generated** via gstack's official `hosts/copilot.ts`
+adapter system — no hand-porting, no drift. (Upstream ships 53 skills; 8 that
+can't run on Copilot CLI Windows are filtered out — see below.) Stress-tested
+end-to-end on Windows: see [STRESS_TEST_REPORT.md](STRESS_TEST_REPORT.md).
+
+This fork **auto-syncs from upstream daily** — a scheduled GitHub Action
+(`.github/workflows/upstream-sync.yml`) polls [garrytan/gstack](https://github.com/garrytan/gstack),
+regenerates the skills through the adapter, and opens a PR. Skill files under
+`plugins/gstack/skills/` are therefore **generated output**, not hand-edited.
 
 ---
 
@@ -55,6 +61,21 @@ curl -fsSL https://raw.githubusercontent.com/aviraldua93/gstack-copilot/main/ins
 This installs Bun, builds gstack binaries from upstream, copies runtime assets
 to `~/.copilot/skills/gstack/`, then downloads Playwright Chromium last (so a
 Playwright failure won't strand the runtime).
+
+### Run a skill
+
+Once installed, invoke any skill from a Copilot CLI session by name (they are
+registered under the `gstack-` prefix). For example:
+
+```shell
+copilot
+> /gstack-review        # pre-landing PR review
+> /gstack-autoplan      # CEO → design → eng → DX review in one pass
+> /gstack-ship          # run tests, review, push, open PR
+```
+
+Run `copilot plugin list` to confirm the plugin is active, and see
+[What's included](#whats-included) below for the full skill catalog.
 
 ### Optional: add Gbrain (persistent semantic memory)
 
@@ -178,9 +199,9 @@ This repository is **both a Copilot CLI marketplace and a plugin**:
 ```
 .github/plugin/marketplace.json    # marketplace manifest (canonical path)
 plugins/gstack/
-├── plugin.json                    # plugin manifest (v0.2.1)
+├── plugin.json                    # plugin manifest (version auto-bumped on sync)
 ├── hooks.json                     # PreToolUse hooks for careful + freeze
-├── skills/                        # 53 SKILL.md files (auto-generated)
+├── skills/                        # 45 SKILL.md files (auto-generated, daily sync)
 ├── LICENSE                        # MIT (Garry Tan)
 └── NOTICE                         # Attribution + architecture explanation
 install.ps1 / install.sh           # One-line installer (binaries + Playwright)
@@ -199,7 +220,7 @@ bun run gen:skill-docs --host copilot
 ```
 
 This means:
-- **Zero hand-ported SKILL.md files** — all 53 skills are canonical, generated output
+- **Zero hand-ported SKILL.md files** — all 45 shipped skills are canonical, generated output
 - **No drift from upstream** — `bun run build` regenerates everything
 - **Same routing context preserved** — multi-line descriptions, triggers, preamble structure
 - **Path rewrites are mechanical** — `~/.claude/skills/gstack` → `~/.copilot/skills/gstack` everywhere
