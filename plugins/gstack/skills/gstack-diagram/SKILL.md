@@ -1,11 +1,12 @@
 ---
-name: learn
+name: diagram
 description: |
-  Manage project learnings. Review, search, prune, and export what gstack
-  has learned across sessions. Use when asked to "what have we learned",
-  "show learnings", "prune stale learnings", or "export learnings".
-  Proactively suggest when the user asks about past patterns or wonders
-  "didn't we fix this before?"
+  Turn an English description (or mermaid source) into a diagram triplet:
+  the source, an editable .excalidraw file you can open on excalidraw.com,
+  and rendered SVG + PNG. The SVG/PNG use clean mermaid style; the
+  .excalidraw carries the hand-drawn aesthetic. Fully offline.
+  Use when asked to "make a diagram", "draw the architecture", "create a
+  flowchart", "diagram this", or "visualize this flow". (gstack)
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run gen:skill-docs -->
@@ -74,7 +75,7 @@ _UPDATE_CHECK=$($GSTACK_BIN/gstack-config get update_check 2>/dev/null || echo "
 echo "UPDATE_CHECK: $_UPDATE_CHECK"
 mkdir -p ~/.gstack/analytics
 if [ "$_TEL" != "off" ]; then
-echo '{"skill":"learn","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(_repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null | tr -cd 'a-zA-Z0-9._-'); echo "${_repo:-unknown}")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
+echo '{"skill":"diagram","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(_repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null | tr -cd 'a-zA-Z0-9._-'); echo "${_repo:-unknown}")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
 fi
 for _PF in $(find ~/.gstack/analytics -maxdepth 1 -name '.pending-*' 2>/dev/null); do
   if [ -f "$_PF" ]; then
@@ -96,7 +97,7 @@ if [ -f "$_LEARN_FILE" ]; then
 else
   echo "LEARNINGS: 0"
 fi
-$GSTACK_BIN/gstack-timeline-log '{"skill":"learn","event":"started","branch":"'"$_BRANCH"'","session":"'"$_SESSION_ID"'"}' 2>/dev/null &
+$GSTACK_BIN/gstack-timeline-log '{"skill":"diagram","event":"started","branch":"'"$_BRANCH"'","session":"'"$_SESSION_ID"'"}' 2>/dev/null &
 _HAS_ROUTING="no"
 if [ -f CLAUDE.md ] && grep -q "## Skill routing" CLAUDE.md 2>/dev/null; then
   _HAS_ROUTING="yes"
@@ -705,7 +706,7 @@ Before each AskUserQuestion, choose `question_id` from `scripts/question-registr
 
 After answer, log best-effort (PostToolUse hook also captures deterministically when installed; dedup on (source, tool_use_id) handles double-writes):
 ```bash
-$GSTACK_BIN/gstack-question-log '{"skill":"learn","question_id":"<id>","question_summary":"<short>","category":"<approval|clarification|routing|cherry-pick|feedback-loop>","door_type":"<one-way|two-way>","options_count":N,"user_choice":"<key>","recommended":"<key>","session_id":"'"$_SESSION_ID"'"}' 2>/dev/null || true
+$GSTACK_BIN/gstack-question-log '{"skill":"diagram","question_id":"<id>","question_summary":"<short>","category":"<approval|clarification|routing|cherry-pick|feedback-loop>","door_type":"<one-way|two-way>","options_count":N,"user_choice":"<key>","recommended":"<key>","session_id":"'"$_SESSION_ID"'"}' 2>/dev/null || true
 ```
 
 For two-way questions, offer: "Tune this question? Reply `tune: never-ask`, `tune: always-ask`, or free-form."
@@ -718,6 +719,24 @@ $GSTACK_BIN/gstack-question-preference --write '{"question_id":"<id>","preferenc
 ```
 
 Exit code 2 = rejected as not user-originated; do not retry. On success: "Set `<id>` → `<preference>`. Active immediately."
+
+## Repo Ownership — See Something, Say Something
+
+`REPO_MODE` controls how to handle issues outside your branch:
+- **`solo`** — You own everything. Investigate and offer to fix proactively.
+- **`collaborative`** / **`unknown`** — Flag via AskUserQuestion, don't fix (may be someone else's).
+
+Always flag anything that looks wrong — one sentence, what you noticed and its impact.
+
+## Search Before Building
+
+Before building anything unfamiliar, **search first.** See `$GSTACK_ROOT/ETHOS.md`.
+- **Layer 1** (tried and true) — don't reinvent. **Layer 2** (new and popular) — scrutinize. **Layer 3** (first principles) — prize above all.
+
+**Eureka:** When first-principles reasoning contradicts conventional wisdom, name it and log:
+```bash
+jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg skill "SKILL_NAME" --arg branch "$(git branch --show-current 2>/dev/null)" --arg insight "ONE_LINE_SUMMARY" '{ts:$ts,skill:$skill,branch:$branch,insight:$insight}' >> ~/.gstack/analytics/eureka.jsonl 2>/dev/null || true
+```
 
 ## Completion Status Protocol
 
@@ -776,174 +795,127 @@ the failure occurred (if outcome is error, otherwise use empty string "").
 
 Skills that run plan reviews (`/plan-*-review`, `/codex review`) include the EXIT PLAN MODE GATE blocking checklist at the end of the skill, which verifies the plan file ends with `## GSTACK REVIEW REPORT` before ExitPlanMode is called. Skills that don't run plan reviews (operational skills like `/ship`, `/qa`, `/review`) typically don't operate in plan mode and have no review report to verify; this footer is a no-op for them. Writing the plan file is the one edit allowed in plan mode.
 
-# Project Learnings Manager
+# /diagram — English in, editable diagram out
 
-You are a **Staff Engineer who maintains the team wiki**. Your job is to help the user
-see what gstack has learned across sessions on this project, search for relevant
-knowledge, and prune stale or contradictory entries.
+Every run emits a **triplet**, never a dead pixel dump:
 
-**HARD GATE:** Do NOT implement code changes. This skill manages learnings only.
+| Artifact | What it's for |
+|---|---|
+| `<slug>.mmd` | the mermaid source — the LLM-friendly interchange format |
+| `<slug>.excalidraw` | editable scene — open it at excalidraw.com, move a box, keep working |
+| `<slug>.svg` + `<slug>.png` | crisp vector for docs + raster for chat/issues/READMEs |
 
----
+Rendering is fully offline via the diagram-render bundle in the browse daemon
+(`lib/diagram-render/dist/diagram-render.html`). No CDN, no network.
 
-## Detect command
+## Step 1 — Author the diagram
 
-Parse the user's input to determine which command to run:
+Write mermaid for the user's request. Rules:
 
-- `/learn` (no arguments) → **Show recent**
-- `/learn search <query>` → **Search**
-- `/learn prune` → **Prune**
-- `/learn export` → **Export**
-- `/learn stats` → **Stats**
-- `/learn add` → **Manual add**
+- **Flowcharts (`graph LR`/`graph TD`)** are the sweet spot: they convert to a
+  fully editable excalidraw scene. Prefer `graph LR` for pipelines/flows,
+  `graph TD` for hierarchies.
+- Sequence, state, gantt, and other mermaid types render to SVG/PNG fine, but
+  the official converter only supports flowcharts — for those types the
+  `.excalidraw` artifact is skipped and you MUST tell the user:
+  "sequence diagrams render but aren't excalidraw-editable yet (upstream
+  converter limitation — flowcharts are)."
+- Keep node labels short; put detail in edge labels. 5-15 nodes is the
+  readable range. If the user's ask needs more, split into multiple diagrams
+  and say why.
 
----
+Decide the output directory: `./diagrams/` when the cwd is a git repo
+(artifacts the user can commit), else `/tmp/gstack-diagrams/`. Derive
+`<slug>` from the diagram's subject (kebab-case, ≤40 chars).
 
-## Show recent (default)
+## Step 2 — Stage the render bundle (once per session)
 
-Show the most recent 20 learnings, grouped by type.
-
-```bash
-eval "$(~/.copilot/skills/gstack/bin/gstack-slug 2>/dev/null)"
-~/.copilot/skills/gstack/bin/gstack-learnings-search --limit 20 2>/dev/null || echo "No learnings yet."
-```
-
-Present the output in a readable format. If no learnings exist, tell the user:
-"No learnings recorded yet. As you use /review, /ship, /investigate, and other skills,
-gstack will automatically capture patterns, pitfalls, and insights it discovers."
-
----
-
-## Search
+The staged copy is content-addressed (same convention as make-pdf's pre-pass),
+so concurrent sessions and mixed gstack versions never clobber each other:
 
 ```bash
-eval "$(~/.copilot/skills/gstack/bin/gstack-slug 2>/dev/null)"
-~/.copilot/skills/gstack/bin/gstack-learnings-search --query "USER_QUERY" --limit 20 2>/dev/null || echo "No matches."
+BUNDLE=""
+for c in "$HOME/.copilot/skills/gstack/lib/diagram-render/dist/diagram-render.html" \
+         "$(git rev-parse --show-toplevel 2>/dev/null)/lib/diagram-render/dist/diagram-render.html"; do
+  [ -f "$c" ] && BUNDLE="$c" && break
+done
+[ -z "$BUNDLE" ] && echo "BUNDLE_MISSING — run: cd ~/.copilot/skills/gstack && bun run build:diagram-render" && exit 1
+SHA=$(shasum -a 256 "$BUNDLE" | cut -c1-16)
+STAGED="/tmp/gstack-diagram-render-$SHA.html"
+[ -f "$STAGED" ] && shasum -a 256 "$STAGED" | grep -q "^$SHA" || { cp "$BUNDLE" "$STAGED.$$" && mv "$STAGED.$$" "$STAGED"; }
+TAB=$($B newtab --json | sed -n 's/.*"tabId":\s*\([0-9]*\).*/\1/p')
+[ -z "$TAB" ] && echo "TAB_OPEN_FAILED — daemon busy? check browse status" && exit 1
+$B load-html "$STAGED" --tab-id "$TAB"
+$B wait '#done' --tab-id "$TAB"
+echo "RENDER_TAB_READY: tab $TAB"
 ```
 
-Replace USER_QUERY with the user's search terms. Present results clearly.
+Remember `$TAB` — **every** `$B js` / `$B wait` / `$B closetab` below MUST pass
+`--tab-id $TAB`. Without it, calls hit whatever tab is active, which may be a
+live /qa or /scrape session sharing the daemon.
 
----
+If `BUNDLE_MISSING`: stop and show the user the build command. Do not improvise
+a CDN fallback — offline is the contract.
 
-## Prune
+## Step 3 — Render the triplet
 
-Check learnings for staleness and contradictions.
+Write the mermaid source to `<outdir>/<slug>.mmd` first (Write tool). The page
+cannot read files itself, so ship the source in via **base64** — never splice
+file contents into a JS template literal (backticks, `${`, and backslashes in
+the source would be interpreted and corrupt it):
 
 ```bash
-eval "$(~/.copilot/skills/gstack/bin/gstack-slug 2>/dev/null)"
-~/.copilot/skills/gstack/bin/gstack-learnings-search --limit 100 2>/dev/null
+# SVG (always). atob() decodes the base64 inside the page.
+$B js --tab-id "$TAB" "window.__renderMermaid('diagram-1', atob('$(base64 < <outdir>/<slug>.mmd | tr -d '\n')')).then(s => { window.__svg = s; return 'SVG OK ' + s.length })"
+$B js --tab-id "$TAB" "window.__svg" --out <outdir>/<slug>.svg
+
+# PNG at 300dpi of a 6.5in placement (1950px)
+$B js --tab-id "$TAB" "window.__rasterize(window.__svg, 1950)" --out <outdir>/<slug>.png
+
+# Editable scene (flowcharts only)
+$B js --tab-id "$TAB" "window.__mermaidToExcalidraw(atob('$(base64 < <outdir>/<slug>.mmd | tr -d '\n')')).then(j => { window.__scene = j; return 'SCENE OK ' + JSON.parse(j).elements.length + ' elements' })"
+$B js --tab-id "$TAB" "window.__scene" --out <outdir>/<slug>.excalidraw
 ```
 
-For each learning in the output:
+Note: `atob()` yields Latin-1; for sources with non-ASCII labels use
+`decodeURIComponent(escape(atob('…')))` to recover UTF-8 exactly.
 
-1. **File existence check:** If the learning has a `files` field, check whether those
-   files still exist in the repo using Glob. If any referenced files are deleted, flag:
-   "STALE: [key] references deleted file [path]"
+If the mermaid render returns an error, show the parse error to the user, fix
+the mermaid, and retry — do not hand the user a broken source file. If
+`__mermaidToExcalidraw` fails on a non-flowchart type, skip the `.excalidraw`
+artifact and deliver the rest with the limitation note from Step 1.
 
-2. **Contradiction check:** Look for learnings with the same `key` but different or
-   opposite `insight` values. Flag: "CONFLICT: [key] has contradicting entries —
-   [insight A] vs [insight B]"
+## Step 4 — Show and deliver
 
-Present each flagged entry via AskUserQuestion:
-- A) Remove this learning
-- B) Keep it
-- C) Update it (I'll tell you what to change)
+1. Read the PNG with the Read tool so the user sees the diagram inline.
+2. List the triplet paths.
+3. One-line editability note: "The `.excalidraw` file opens at excalidraw.com
+   (File → Open) — edit it there and I can re-render from the edited scene."
+4. If the user wants changes, edit the `.mmd` source and re-run Step 3 — the
+   source is the single source of truth.
 
-For removals, read the learnings.jsonl file and remove the matching line, then write
-back. For updates, append a new entry with the corrected insight (append-only, the
-latest entry wins).
-
----
-
-## Export
-
-Export learnings as markdown suitable for adding to CLAUDE.md or project documentation.
+Re-rendering an EDITED `.excalidraw` (user round-trip): load the scene file
+and export without touching the mermaid — base64 transport again, since scene
+JSON is full of quotes and backslashes:
 
 ```bash
-eval "$(~/.copilot/skills/gstack/bin/gstack-slug 2>/dev/null)"
-~/.copilot/skills/gstack/bin/gstack-learnings-search --limit 50 2>/dev/null
+$B js --tab-id "$TAB" "window.__excalidrawToSvg(atob('$(base64 < <outdir>/<slug>.excalidraw | tr -d '\n')')).then(s => { window.__svg = s; return 'OK' })"
+$B js --tab-id "$TAB" "window.__svg" --out <outdir>/<slug>.svg
+$B js --tab-id "$TAB" "window.__rasterize(window.__svg, 1950)" --out <outdir>/<slug>.png
 ```
 
-Format the output as a markdown section:
+## Rules
 
-```markdown
-## Project Learnings
+- **Never ship the triplet without rendering it.** A `.mmd` file alone is not
+  a diagram. If rendering is impossible (bundle missing, browse down), say so
+  and stop.
+- **Cleanup:** close the render tab when the conversation's diagram work is
+  done (`$B closetab $TAB`), not between diagrams.
+- For diagrams destined for a PDF: remind the user that `make-pdf` renders
+  ` ```mermaid ` fences natively — embedding the `.mmd` in their markdown is
+  better than embedding the PNG.
 
-### Patterns
-- **[key]**: [insight] (confidence: N/10)
+## Completion status
 
-### Pitfalls
-- **[key]**: [insight] (confidence: N/10)
-
-### Preferences
-- **[key]**: [insight]
-
-### Architecture
-- **[key]**: [insight] (confidence: N/10)
-```
-
-Present the formatted output to the user. Ask if they want to append it to CLAUDE.md
-or save it as a separate file.
-
----
-
-## Stats
-
-Show summary statistics about the project's learnings.
-
-```bash
-eval "$(~/.copilot/skills/gstack/bin/gstack-slug 2>/dev/null)"
-eval "$(~/.copilot/skills/gstack/bin/gstack-paths)"
-LEARN_FILE="$GSTACK_STATE_ROOT/projects/$SLUG/learnings.jsonl"
-if [ -f "$LEARN_FILE" ]; then
-  TOTAL=$(wc -l < "$LEARN_FILE" | tr -d ' ')
-  echo "TOTAL: $TOTAL entries"
-  # Count by type (after dedup)
-  cat "$LEARN_FILE" | bun -e "
-    const lines = (await Bun.stdin.text()).trim().split('\n').filter(Boolean);
-    const seen = new Map();
-    for (const line of lines) {
-      try {
-        const e = JSON.parse(line);
-        const dk = (e.key||'') + '|' + (e.type||'');
-        const existing = seen.get(dk);
-        if (!existing || new Date(e.ts) > new Date(existing.ts)) seen.set(dk, e);
-      } catch {}
-    }
-    const byType = {};
-    const bySource = {};
-    let totalConf = 0;
-    for (const e of seen.values()) {
-      byType[e.type] = (byType[e.type]||0) + 1;
-      bySource[e.source] = (bySource[e.source]||0) + 1;
-      totalConf += e.confidence || 0;
-    }
-    console.log('UNIQUE: ' + seen.size + ' (after dedup)');
-    console.log('RAW_ENTRIES: ' + lines.length);
-    console.log('BY_TYPE: ' + JSON.stringify(byType));
-    console.log('BY_SOURCE: ' + JSON.stringify(bySource));
-    console.log('AVG_CONFIDENCE: ' + (totalConf / seen.size).toFixed(1));
-  " 2>/dev/null
-else
-  echo "NO_LEARNINGS"
-fi
-```
-
-Present the stats in a readable table format.
-
----
-
-## Manual add
-
-The user wants to manually add a learning. Use AskUserQuestion to gather:
-1. Type (pattern / pitfall / preference / architecture / tool)
-2. A short key (2-5 words, kebab-case)
-3. The insight (one sentence)
-4. Confidence (1-10)
-5. Related files (optional)
-
-Then log it:
-
-```bash
-~/.copilot/skills/gstack/bin/gstack-learnings-log '{"skill":"learn","type":"TYPE","key":"KEY","insight":"INSIGHT","confidence":N,"source":"user-stated","files":["FILE1"]}'
-```
+- DONE — triplet (or SVG/PNG pair + limitation note) delivered and shown.
+- BLOCKED — bundle or browse unavailable; build/setup command surfaced.
