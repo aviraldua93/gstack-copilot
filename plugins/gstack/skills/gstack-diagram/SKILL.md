@@ -1,10 +1,12 @@
 ---
-name: gstack
+name: diagram
 description: |
-  Router for the gstack skill suite. Sends any gstack request to the right skill
-  (planning, review, QA, shipping, debugging, docs, security, design). For browser/QA
-  and dogfooding it points you at /browse. Use when you invoke gstack without a specific
-  skill, or ask "which gstack skill fits this?". (gstack)
+  Turn an English description (or mermaid source) into a diagram triplet:
+  the source, an editable .excalidraw file you can open on excalidraw.com,
+  and rendered SVG + PNG. The SVG/PNG use clean mermaid style; the
+  .excalidraw carries the hand-drawn aesthetic. Fully offline.
+  Use when asked to "make a diagram", "draw the architecture", "create a
+  flowchart", "diagram this", or "visualize this flow". (gstack)
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run gen:skill-docs -->
@@ -73,7 +75,7 @@ _UPDATE_CHECK=$($GSTACK_BIN/gstack-config get update_check 2>/dev/null || echo "
 echo "UPDATE_CHECK: $_UPDATE_CHECK"
 mkdir -p ~/.gstack/analytics
 if [ "$_TEL" != "off" ]; then
-echo '{"skill":"gstack","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(_repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null | tr -cd 'a-zA-Z0-9._-'); echo "${_repo:-unknown}")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
+echo '{"skill":"diagram","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(_repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null | tr -cd 'a-zA-Z0-9._-'); echo "${_repo:-unknown}")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
 fi
 for _PF in $(find ~/.gstack/analytics -maxdepth 1 -name '.pending-*' 2>/dev/null); do
   if [ -f "$_PF" ]; then
@@ -95,7 +97,7 @@ if [ -f "$_LEARN_FILE" ]; then
 else
   echo "LEARNINGS: 0"
 fi
-$GSTACK_BIN/gstack-timeline-log '{"skill":"gstack","event":"started","branch":"'"$_BRANCH"'","session":"'"$_SESSION_ID"'"}' 2>/dev/null &
+$GSTACK_BIN/gstack-timeline-log '{"skill":"diagram","event":"started","branch":"'"$_BRANCH"'","session":"'"$_SESSION_ID"'"}' 2>/dev/null &
 _HAS_ROUTING="no"
 for _RF in CLAUDE.md AGENTS.md; do
   if [ -f "$_RF" ] && grep -q "## Skill routing" "$_RF" 2>/dev/null; then
@@ -546,72 +548,127 @@ the failure occurred (if outcome is error, otherwise use empty string "").
 
 Skills that run plan reviews (`/plan-*-review`, `/codex review`) include the EXIT PLAN MODE GATE blocking checklist at the end of the skill, which verifies the plan file ends with `## GSTACK REVIEW REPORT` before ExitPlanMode is called. Skills that don't run plan reviews (operational skills like `/ship`, `/qa`, `/review`) typically don't operate in plan mode and have no review report to verify; this footer is a no-op for them. Writing the plan file is the one edit allowed in plan mode.
 
-## Route first
+# /diagram — English in, editable diagram out
 
-This is the gstack router. Its one job is to send the request to the right skill.
+Every run emits a **triplet**, never a dead pixel dump:
 
-1. If the request is about a browser, QA, dogfooding, screenshots, or inspecting a page
-   (open a site, test a deploy, take a screenshot, check a flow visually) → invoke `/browse`.
-2. Otherwise, route by the rules below. If nothing matches, answer directly.
+| Artifact | What it's for |
+|---|---|
+| `<slug>.mmd` | the mermaid source — the LLM-friendly interchange format |
+| `<slug>.excalidraw` | editable scene — open it at excalidraw.com, move a box, keep working |
+| `<slug>.svg` + `<slug>.png` | crisp vector for docs + raster for chat/issues/READMEs |
 
-Best-effort, record which way you routed (never block on it). Set `ROUTE_OUTCOME` to
-`browse` (sent to /browse), `routed` (sent to another skill), or `direct` (answered
-directly, no skill matched):
+Rendering is fully offline via the diagram-render bundle in the browse daemon
+(`lib/diagram-render/dist/diagram-render.html`). No CDN, no network.
+
+## Step 1 — Author the diagram
+
+Write mermaid for the user's request. Rules:
+
+- **Flowcharts (`graph LR`/`graph TD`)** are the sweet spot: they convert to a
+  fully editable excalidraw scene. Prefer `graph LR` for pipelines/flows,
+  `graph TD` for hierarchies.
+- Sequence, state, gantt, and other mermaid types render to SVG/PNG fine, but
+  the official converter only supports flowcharts — for those types the
+  `.excalidraw` artifact is skipped and you MUST tell the user:
+  "sequence diagrams render but aren't excalidraw-editable yet (upstream
+  converter limitation — flowcharts are)."
+- Keep node labels short; put detail in edge labels. 5-15 nodes is the
+  readable range. If the user's ask needs more, split into multiple diagrams
+  and say why.
+
+Decide the output directory: `./diagrams/` when the cwd is a git repo
+(artifacts the user can commit), else `/tmp/gstack-diagrams/`. Derive
+`<slug>` from the diagram's subject (kebab-case, ≤40 chars).
+
+## Step 2 — Stage the render bundle (once per session)
+
+The staged copy is content-addressed (same convention as make-pdf's pre-pass),
+so concurrent sessions and mixed gstack versions never clobber each other:
+
 ```bash
-~/.copilot/skills/gstack/bin/gstack-telemetry-log --event-type route --skill gstack --outcome ROUTE_OUTCOME --session-id "$_SESSION_ID" 2>/dev/null || true
+BUNDLE=""
+for c in "$HOME/.copilot/skills/gstack/lib/diagram-render/dist/diagram-render.html" \
+         "$(git rev-parse --show-toplevel 2>/dev/null)/lib/diagram-render/dist/diagram-render.html"; do
+  [ -f "$c" ] && BUNDLE="$c" && break
+done
+[ -z "$BUNDLE" ] && echo "BUNDLE_MISSING — run: cd ~/.copilot/skills/gstack && bun run build:diagram-render" && exit 1
+SHA=$(shasum -a 256 "$BUNDLE" | cut -c1-16)
+STAGED="/tmp/gstack-diagram-render-$SHA.html"
+[ -f "$STAGED" ] && shasum -a 256 "$STAGED" | grep -q "^$SHA" || { cp "$BUNDLE" "$STAGED.$$" && mv "$STAGED.$$" "$STAGED"; }
+TAB=$($B newtab --json | sed -n 's/.*"tabId":\s*\([0-9]*\).*/\1/p')
+[ -z "$TAB" ] && echo "TAB_OPEN_FAILED — daemon busy? check browse status" && exit 1
+$B load-html "$STAGED" --tab-id "$TAB"
+$B wait '#done' --tab-id "$TAB"
+echo "RENDER_TAB_READY: tab $TAB"
 ```
 
-If `PROACTIVE` is `false`: do NOT proactively invoke or suggest other gstack skills during
-this session. Only run skills the user explicitly invokes. This preference persists across
-sessions via `gstack-config`.
+Remember `$TAB` — **every** `$B js` / `$B wait` / `$B closetab` below MUST pass
+`--tab-id $TAB`. Without it, calls hit whatever tab is active, which may be a
+live /qa or /scrape session sharing the daemon.
 
-If `PROACTIVE` is `true` (default): **invoke the Skill tool** when the user's request
-matches a skill's purpose. Do NOT answer directly when a skill exists for the task.
-Use the Skill tool to invoke it. The skill has specialized workflows, checklists, and
-quality gates that produce better results than answering inline.
+If `BUNDLE_MISSING`: stop and show the user the build command. Do not improvise
+a CDN fallback — offline is the contract.
 
-**Routing rules — when you see these patterns, INVOKE the skill via the Skill tool:**
-- User describes a new idea, asks "is this worth building", brainstorms, pitches a concept → invoke `/office-hours`
-- User asks to spec something out, file an issue, write up a ticket, "turn this into a GitHub issue", "backlog item" → invoke `/spec`
-- User asks about strategy, scope, ambition, "think bigger", "what should we build" → invoke `/plan-ceo-review`
-- User asks to review architecture, lock in the plan, "does this design make sense" → invoke `/plan-eng-review`
-- User asks about design system, brand, visual identity, "how should this look" → invoke `/design-consultation`
-- User asks to review design of a plan → invoke `/plan-design-review`
-- User asks about developer experience of a plan, API/CLI/SDK design → invoke `/plan-devex-review`
-- User wants all reviews done automatically, "review everything" → invoke `/autoplan`
-- User reports a bug, error, broken behavior, "why is this broken", "this doesn't work", "wtf", "something's wrong" → invoke `/investigate`
-- User asks to test the site, find bugs, QA, "does this work", "check the deploy" → invoke `/qa`
-- User asks to just report bugs without fixing → invoke `/qa-only`
-- User asks to review code, check the diff, pre-landing review, "look at my changes" → invoke `/review`
-- User asks about visual polish, design audit of a live site, "this looks off" → invoke `/design-review`
-- User asks to audit the live developer experience, time-to-hello-world → invoke `/devex-review`
-- User asks to ship, deploy, push, create a PR, "let's land this", "send it" → invoke `/ship`
-- User asks to merge + deploy + verify as one flow → invoke `/land-and-deploy`
-- User asks to configure deployment for the project → invoke `/setup-deploy`
-- User asks to monitor prod after shipping, post-deploy checks → invoke `/canary`
-- User asks to update docs after shipping → invoke `/document-release`
-- User asks to write docs from scratch, generate documentation, "document this feature/module" → invoke `/document-generate`
-- User asks for a weekly retro, what did we ship, "how'd we do" → invoke `/retro`
-- User asks for a second opinion, codex review → invoke `/codex`
-- User asks for safety mode, careful mode → invoke `/careful` or `/guard`
-- User asks to restrict edits to a directory → invoke `/freeze` or `/unfreeze`
-- User asks to upgrade gstack → invoke `/gstack-upgrade`
-- User asks to save progress, checkpoint, "save my work" → invoke `/context-save`
-- User asks to resume, restore, "where was I" → invoke `/context-restore`
-- User asks about security, OWASP, vulnerabilities, "is this secure" → invoke `/cso`
-- User asks to make a PDF, document, publication → invoke `/make-pdf`
-- User asks to launch a real browser for QA, "open the browser" → invoke `/open-gstack-browser`
-- User asks to import cookies for authenticated testing → invoke `/setup-browser-cookies`
-- User asks about page speed, performance regression, benchmarks → invoke `/benchmark`
-- User asks what gstack has learned, "show learnings" → invoke `/learn`
-- User asks to tune question sensitivity, "stop asking me that" → invoke `/plan-tune`
-- User asks for code quality dashboard, "health check" → invoke `/health`
+## Step 3 — Render the triplet
 
-**When in doubt, invoke the skill.** A false positive (invoking a skill that wasn't
-needed) is cheaper than a false negative (answering ad-hoc when a structured workflow
-exists). The skill provides multi-step workflows, checklists, and quality gates that
-always produce better results than an ad-hoc answer. If no skill matches, answer
-directly as usual.
+Write the mermaid source to `<outdir>/<slug>.mmd` first (Write tool). The page
+cannot read files itself, so ship the source in via **base64** — never splice
+file contents into a JS template literal (backticks, `${`, and backslashes in
+the source would be interpreted and corrupt it):
 
-If the user opts out of suggestions, run `gstack-config set proactive false`.
-If they opt back in, run `gstack-config set proactive true`.
+```bash
+# SVG (always). atob() decodes the base64 inside the page.
+$B js --tab-id "$TAB" "window.__renderMermaid('diagram-1', atob('$(base64 < <outdir>/<slug>.mmd | tr -d '\n')')).then(s => { window.__svg = s; return 'SVG OK ' + s.length })"
+$B js --tab-id "$TAB" "window.__svg" --out <outdir>/<slug>.svg
+
+# PNG at 300dpi of a 6.5in placement (1950px)
+$B js --tab-id "$TAB" "window.__rasterize(window.__svg, 1950)" --out <outdir>/<slug>.png
+
+# Editable scene (flowcharts only)
+$B js --tab-id "$TAB" "window.__mermaidToExcalidraw(atob('$(base64 < <outdir>/<slug>.mmd | tr -d '\n')')).then(j => { window.__scene = j; return 'SCENE OK ' + JSON.parse(j).elements.length + ' elements' })"
+$B js --tab-id "$TAB" "window.__scene" --out <outdir>/<slug>.excalidraw
+```
+
+Note: `atob()` yields Latin-1; for sources with non-ASCII labels use
+`decodeURIComponent(escape(atob('…')))` to recover UTF-8 exactly.
+
+If the mermaid render returns an error, show the parse error to the user, fix
+the mermaid, and retry — do not hand the user a broken source file. If
+`__mermaidToExcalidraw` fails on a non-flowchart type, skip the `.excalidraw`
+artifact and deliver the rest with the limitation note from Step 1.
+
+## Step 4 — Show and deliver
+
+1. Read the PNG with the Read tool so the user sees the diagram inline.
+2. List the triplet paths.
+3. One-line editability note: "The `.excalidraw` file opens at excalidraw.com
+   (File → Open) — edit it there and I can re-render from the edited scene."
+4. If the user wants changes, edit the `.mmd` source and re-run Step 3 — the
+   source is the single source of truth.
+
+Re-rendering an EDITED `.excalidraw` (user round-trip): load the scene file
+and export without touching the mermaid — base64 transport again, since scene
+JSON is full of quotes and backslashes:
+
+```bash
+$B js --tab-id "$TAB" "window.__excalidrawToSvg(atob('$(base64 < <outdir>/<slug>.excalidraw | tr -d '\n')')).then(s => { window.__svg = s; return 'OK' })"
+$B js --tab-id "$TAB" "window.__svg" --out <outdir>/<slug>.svg
+$B js --tab-id "$TAB" "window.__rasterize(window.__svg, 1950)" --out <outdir>/<slug>.png
+```
+
+## Rules
+
+- **Never ship the triplet without rendering it.** A `.mmd` file alone is not
+  a diagram. If rendering is impossible (bundle missing, browse down), say so
+  and stop.
+- **Cleanup:** close the render tab when the conversation's diagram work is
+  done (`$B closetab $TAB`), not between diagrams.
+- For diagrams destined for a PDF: remind the user that `make-pdf` renders
+  ` ```mermaid ` fences natively — embedding the `.mmd` in their markdown is
+  better than embedding the PNG.
+
+## Completion status
+
+- DONE — triplet (or SVG/PNG pair + limitation note) delivered and shown.
+- BLOCKED — bundle or browse unavailable; build/setup command surfaced.
