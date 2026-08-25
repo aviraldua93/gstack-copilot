@@ -40,6 +40,24 @@ echo "REPO_MODE: $REPO_MODE"
 _SESSION_KIND=$($GSTACK_BIN/gstack-session-kind 2>/dev/null || echo "interactive")
 case "$_SESSION_KIND" in spawned|headless|interactive) ;; *) _SESSION_KIND="interactive" ;; esac
 echo "SESSION_KIND: $_SESSION_KIND"
+# Conductor host: AskUserQuestion is unreliable here (native disabled, MCP
+# variant flaky), so skills render decisions as prose instead of calling the
+# tool. Gated on !headless so an eval/CI run INSIDE Conductor (GSTACK_HEADLESS)
+# still BLOCKs rather than rendering prose to nobody.
+if [ "$_SESSION_KIND" != "headless" ] && { [ -n "${CONDUCTOR_WORKSPACE_PATH:-}" ] || [ -n "${CONDUCTOR_PORT:-}" ]; }; then
+  echo "CONDUCTOR_SESSION: true"
+fi
+_ACTIVATED=$([ -f ~/.gstack/.activated ] && echo "yes" || echo "no")
+_FIRST_LOOP_SHOWN=$([ -f ~/.gstack/.first-loop-tip-shown ] && echo "yes" || echo "no")
+echo "ACTIVATED: $_ACTIVATED"
+echo "FIRST_LOOP_SHOWN: $_FIRST_LOOP_SHOWN"
+# First-run project detection: run the detector ONLY on the first-ever skill run
+# (ACTIVATED=no, interactive) so it stays off the hot path for every run after.
+_FIRST_TASK=""
+if [ "$_ACTIVATED" = "no" ] && [ "$_SESSION_KIND" != "headless" ]; then
+  _FIRST_TASK=$($GSTACK_BIN/gstack-first-task-detect 2>/dev/null || true)
+fi
+echo "FIRST_TASK: $_FIRST_TASK"
 _LAKE_SEEN=$([ -f ~/.gstack/.completeness-intro-seen ] && echo "yes" || echo "no")
 echo "LAKE_INTRO: $_LAKE_SEEN"
 _TEL=$($GSTACK_BIN/gstack-config get telemetry 2>/dev/null || true)
@@ -53,6 +71,8 @@ if [ "$_EXPLAIN_LEVEL" != "default" ] && [ "$_EXPLAIN_LEVEL" != "terse" ]; then 
 echo "EXPLAIN_LEVEL: $_EXPLAIN_LEVEL"
 _QUESTION_TUNING=$($GSTACK_BIN/gstack-config get question_tuning 2>/dev/null || echo "false")
 echo "QUESTION_TUNING: $_QUESTION_TUNING"
+_UPDATE_CHECK=$($GSTACK_BIN/gstack-config get update_check 2>/dev/null || echo "true")
+echo "UPDATE_CHECK: $_UPDATE_CHECK"
 mkdir -p ~/.gstack/analytics
 if [ "$_TEL" != "off" ]; then
 echo '{"skill":"make-pdf","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(_repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null | tr -cd 'a-zA-Z0-9._-'); echo "${_repo:-unknown}")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
@@ -79,9 +99,11 @@ else
 fi
 $GSTACK_BIN/gstack-timeline-log '{"skill":"make-pdf","event":"started","branch":"'"$_BRANCH"'","session":"'"$_SESSION_ID"'"}' 2>/dev/null &
 _HAS_ROUTING="no"
-if [ -f CLAUDE.md ] && grep -q "## Skill routing" CLAUDE.md 2>/dev/null; then
-  _HAS_ROUTING="yes"
-fi
+for _RF in CLAUDE.md AGENTS.md; do
+  if [ -f "$_RF" ] && grep -q "## Skill routing" "$_RF" 2>/dev/null; then
+    _HAS_ROUTING="yes"
+  fi
+done
 _ROUTING_DECLINED=$($GSTACK_BIN/gstack-config get routing_declined 2>/dev/null || echo "false")
 echo "HAS_ROUTING: $_HAS_ROUTING"
 echo "ROUTING_DECLINED: $_ROUTING_DECLINED"
@@ -120,7 +142,7 @@ _ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 P=""
 [ -n "$MAKE_PDF_BIN" ] && [ -x "$MAKE_PDF_BIN" ] && P="$MAKE_PDF_BIN"
 [ -z "$P" ] && [ -n "$_ROOT" ] && [ -x "$_ROOT/.copilot/skills/gstack/make-pdf/dist/pdf" ] && P="$_ROOT/.copilot/skills/gstack/make-pdf/dist/pdf"
-[ -z "$P" ] && P="$HOME$GSTACK_MAKE_PDF/pdf"
+[ -z "$P" ] && P="$GSTACK_MAKE_PDF/pdf"
 if [ -x "$P" ]; then
   echo "MAKE_PDF_READY: $P"
   alias _p_="$P"   # shellcheck alias helper (not exported)
@@ -155,11 +177,13 @@ In plan mode, allowed because they inform the plan: `$B`, `$D`, `codex exec`/`co
 
 ## Skill Invocation During Plan Mode
 
-If the user invokes a skill in plan mode, the skill takes precedence over generic plan mode behavior. **Treat the skill file as executable instructions, not reference.** Follow it step by step starting from Step 0; the first AskUserQuestion is the workflow entering plan mode, not a violation of it. AskUserQuestion (any variant — `mcp__*__AskUserQuestion` or native; see "AskUserQuestion Format → Tool resolution") satisfies plan mode's end-of-turn requirement. If AskUserQuestion is unavailable or a call fails, follow the AskUserQuestion Format failure fallback: `headless` → BLOCKED; `interactive` → the prose fallback (also satisfies end-of-turn). At a STOP point, stop immediately. Do not continue the workflow or call ExitPlanMode there. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" execute. Call ExitPlanMode only after the skill workflow completes, or if the user tells you to cancel the skill or leave plan mode.
+If the user invokes a skill in plan mode, the skill takes precedence over generic plan mode behavior. **Treat the skill file as executable instructions, not reference.** Follow it step by step starting from Step 0; any AskUserQuestion the skill fires is the workflow operating within plan mode, not a violation of it — and a skill whose instructions resolve a question themselves (e.g. a plan-mode auto-select) may legitimately not ask it. AskUserQuestion (any variant — `mcp__*__AskUserQuestion` or native; see "AskUserQuestion Format → Tool resolution") satisfies plan mode's end-of-turn requirement. If AskUserQuestion is unavailable or a call fails, follow the AskUserQuestion Format failure fallback: `headless` → BLOCKED; `interactive` → the prose fallback (also satisfies end-of-turn). At a STOP point, stop immediately. Do not continue the workflow or call ExitPlanMode there. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" execute. Call ExitPlanMode only after the skill workflow completes, or if the user tells you to cancel the skill or leave plan mode.
 
 If `PROACTIVE` is `"false"`, do not auto-invoke or proactively suggest skills. If a skill seems useful, ask: "I think /skillname might help here — want me to run it?"
 
 If `SKILL_PREFIX` is `"true"`, suggest/invoke `/gstack-*` names. Disk paths stay `$GSTACK_ROOT/[skill-name]/SKILL.md`.
+
+If `UPDATE_CHECK` is `"false"`, skip the next two lines — the update-check binary emits nothing in that mode, so there is no `UPGRADE_AVAILABLE` / `JUST_UPGRADED` output to act on.
 
 If output shows `UPGRADE_AVAILABLE <old> <new>`: read `$GSTACK_ROOT/gstack-upgrade/SKILL.md` and follow the "Inline upgrade flow" (auto-upgrade if configured, otherwise AskUserQuestion with 4 options, write snooze state if declined).
 
@@ -244,6 +268,24 @@ touch ~/.gstack/.proactive-prompted
 ```
 
 Skip if `PROACTIVE_PROMPTED` is `yes`.
+
+## First-run guidance (one-time)
+
+If `ACTIVATED` is `no` (first skill run on this machine) AND the preamble printed a non-empty `FIRST_TASK:` value that is NOT `nongit`: show ONE short, project-specific line mapped from the token, as a heads-up, then CONTINUE with whatever the user actually asked — do NOT halt their task. Map the token: `greenfield` → "Fresh repo — shape it first with `/spec` or `/office-hours`." `code_node`/`code_python`/`code_rust`/`code_go`/`code_ruby`/`code_ios` → "There's code here — `/qa` to see it work, or `/investigate` if something's off." `branch_ahead` → "Unshipped work on this branch — `/review` then `/ship`." `dirty_default` → "Uncommitted changes — `/review` before committing." `clean_default` → "Pick one: `/spec`, `/investigate`, or `/qa`." Then substitute the token you saw for TASK_TOKEN and run (best-effort), and mark activated:
+```bash
+$GSTACK_BIN/gstack-telemetry-log --event-type first_task_scaffold_shown --skill "TASK_TOKEN" --outcome shown 2>/dev/null || true
+touch ~/.gstack/.activated 2>/dev/null || true
+```
+
+If `ACTIVATED` is `no` but `FIRST_TASK:` is empty or `nongit` (headless, non-git, or nothing actionable): show nothing, just run `touch ~/.gstack/.activated 2>/dev/null || true`.
+
+Else if `ACTIVATED` is `yes` AND `FIRST_LOOP_SHOWN` is `no`: say once as a heads-up (then continue):
+
+> Tip: gstack pays off when you complete one loop — **plan → review → ship**. A common first loop: `/office-hours` or `/spec` to shape it, `/plan-eng-review` to lock it, then `/ship`.
+
+Then run `touch ~/.gstack/.first-loop-tip-shown 2>/dev/null || true`.
+
+Skip this section if `ACTIVATED` and `FIRST_LOOP_SHOWN` are both `yes`.
 
 If `HAS_ROUTING` is `no` AND `ROUTING_DECLINED` is `false` AND `PROACTIVE_PROMPTED` is `yes`:
 Check if a CLAUDE.md file exists in the project root. If it does not exist, create it.
@@ -366,10 +408,13 @@ _BRAIN_SYNC_MODE=$("$_BRAIN_CONFIG_BIN" get artifacts_sync_mode 2>/dev/null || e
 # Detect remote-MCP mode (Path 4 of /setup-gbrain). Local artifacts sync is
 # a no-op in remote mode; the brain server pulls from GitHub/GitLab on its
 # own cadence. Read claude.json directly to keep this preamble fast (no
-# subprocess to claude CLI on every skill start).
+# subprocess to claude CLI on every skill start). Both registration scopes
+# are read (#2499): user scope, then the nearest-ancestor project scope.
 _GBRAIN_MCP_MODE="none"
+_GBRAIN_MCP_ENTRY=""
 if command -v jq >/dev/null 2>&1 && [ -f "$HOME/.claude.json" ]; then
-  _GBRAIN_MCP_TYPE=$(jq -r '.mcpServers.gbrain.type // .mcpServers.gbrain.transport // empty' "$HOME/.claude.json" 2>/dev/null)
+  _GBRAIN_MCP_ENTRY=$(jq -c --arg cwd "$PWD" '((.projects // {}) | to_entries | map(select((.key as $k | $cwd == $k or ($cwd | startswith($k + "/")) or ($cwd | startswith($k + "\\"))) and ((try .value.mcpServers.gbrain catch null) != null))) | sort_by(.key | length) | last | .value.mcpServers.gbrain) // .mcpServers.gbrain // empty' "$HOME/.claude.json" 2>/dev/null)
+  _GBRAIN_MCP_TYPE=$(printf '%s' "$_GBRAIN_MCP_ENTRY" | jq -r '.type // .transport // empty' 2>/dev/null)
   case "$_GBRAIN_MCP_TYPE" in
     url|http|sse) _GBRAIN_MCP_MODE="remote-http" ;;
     stdio) _GBRAIN_MCP_MODE="local-stdio" ;;
@@ -390,6 +435,7 @@ if [ -d "$_GSTACK_HOME/.git" ] && [ "$_BRAIN_SYNC_MODE" != "off" ]; then
   _BRAIN_DO_PULL=1
   if [ -f "$_BRAIN_LAST_PULL_FILE" ]; then
     _BRAIN_LAST=$(cat "$_BRAIN_LAST_PULL_FILE" 2>/dev/null || echo 0)
+    case "$_BRAIN_LAST" in ''|*[!0-9]*) _BRAIN_LAST=0 ;; esac
     _BRAIN_AGE=$(( _BRAIN_NOW - _BRAIN_LAST ))
     [ "$_BRAIN_AGE" -lt 86400 ] && _BRAIN_DO_PULL=0
   fi
@@ -403,11 +449,15 @@ fi
 if [ "$_GBRAIN_MCP_MODE" = "remote-http" ]; then
   # Remote-MCP mode: local artifacts sync is a no-op (brain admin's server
   # pulls from GitHub/GitLab). Show the user this is by design, not broken.
-  _GBRAIN_HOST=$(jq -r '.mcpServers.gbrain.url // empty' "$HOME/.claude.json" 2>/dev/null | sed -E 's|^https?://([^/:]+).*|\1|')
+  _GBRAIN_HOST=$(printf '%s' "${_GBRAIN_MCP_ENTRY:-}" | jq -r '.url // empty' 2>/dev/null | sed -E 's|^https?://([^/:]+).*|\1|' | head -1 | tr -cd 'A-Za-z0-9._-')
   echo "ARTIFACTS_SYNC: remote-mode (managed by brain server ${_GBRAIN_HOST:-remote})"
 elif [ -d "$_GSTACK_HOME/.git" ] && [ "$_BRAIN_SYNC_MODE" != "off" ]; then
   _BRAIN_QUEUE_DEPTH=0
-  [ -f "$_GSTACK_HOME/.brain-queue.jsonl" ] && _BRAIN_QUEUE_DEPTH=$(wc -l < "$_GSTACK_HOME/.brain-queue.jsonl" | tr -d ' ')
+  # Spool-dir queue (one file per record); legacy .brain-queue.jsonl lines are
+  # counted too until the drain migrates them.
+  [ -d "$_GSTACK_HOME/.brain-queue.d" ] && _BRAIN_QUEUE_DEPTH=$(find "$_GSTACK_HOME/.brain-queue.d" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+  [ -f "$_GSTACK_HOME/.brain-queue.jsonl" ] && _BRAIN_QUEUE_DEPTH=$(( _BRAIN_QUEUE_DEPTH + $(wc -l < "$_GSTACK_HOME/.brain-queue.jsonl" | tr -d ' ') ))
+  [ -f "$_GSTACK_HOME/.brain-queue.jsonl.migrating" ] && _BRAIN_QUEUE_DEPTH=$(( _BRAIN_QUEUE_DEPTH + $(wc -l < "$_GSTACK_HOME/.brain-queue.jsonl.migrating" | tr -d ' ') ))
   _BRAIN_LAST_PUSH="never"
   [ -f "$_GSTACK_HOME/.brain-last-push" ] && _BRAIN_LAST_PUSH=$(cat "$_GSTACK_HOME/.brain-last-push" 2>/dev/null || echo never)
   echo "ARTIFACTS_SYNC: mode=$_BRAIN_SYNC_MODE | last_push=$_BRAIN_LAST_PUSH | queue=$_BRAIN_QUEUE_DEPTH"
@@ -483,7 +533,13 @@ Escalate after 3 failed attempts, uncertain security-sensitive changes, or scope
 
 ## Operational Self-Improvement
 
-Before completing, if you discovered a durable project quirk or command fix that would save 5+ minutes next time, log it:
+Before completing, review the session for durable learnings and log each one —
+this step ALWAYS runs, it is not conditional on something feeling noteworthy
+(#2402: 43 of 44 learnings came from explicit /learn because "if you
+discovered" read as optional). A durable learning is a project quirk, command
+fix, pitfall, or pattern that would save 5+ minutes in a future session. If
+the review genuinely surfaces none, state "No durable learnings this session"
+in your completion summary — an explicit empty result, not a skipped step.
 
 ```bash
 $GSTACK_BIN/gstack-learnings-log '{"skill":"SKILL_NAME","type":"operational","key":"SHORT_KEY","insight":"DESCRIPTION","confidence":N,"source":"observed"}'
@@ -514,11 +570,15 @@ fi
 if [ "$_TEL" != "off" ] && [ -x ~/.copilot/skills/gstack/bin/gstack-telemetry-log ]; then
   ~/.copilot/skills/gstack/bin/gstack-telemetry-log \
     --skill "SKILL_NAME" --duration "$_TEL_DUR" --outcome "OUTCOME" \
-    --used-browse "USED_BROWSE" --session-id "$_SESSION_ID" 2>/dev/null &
+    --used-browse "USED_BROWSE" --session-id "$_SESSION_ID" \
+    --error-message "ERROR_MESSAGE" --failed-step "FAILED_STEP" 2>/dev/null &
 fi
 ```
 
 Replace `SKILL_NAME`, `OUTCOME`, and `USED_BROWSE` before running.
+Replace `ERROR_MESSAGE` with a short description of the error (if outcome is error,
+otherwise use empty string ""), and `FAILED_STEP` with the step name or number where
+the failure occurred (if outcome is error, otherwise use empty string "").
 
 ## Plan Status Footer
 
@@ -588,6 +648,79 @@ as you edit the markdown. Skip the PDF round trip until you're ready.
 $P generate --no-confidential memo.md memo.pdf
 ```
 
+### Diagrams — mermaid and excalidraw fences render as pictures
+
+A column-0 ` ```mermaid ` or ` ```excalidraw ` fence in the markdown renders
+as a crisp vector diagram, fully offline (vendored bundle, no CDN). Indented
+fences (inside lists) stay plain code blocks by design. A broken fence
+produces a visible red diagnostic block with the parse error — never silent
+raw code.
+
+Fence info-string options:
+
+```
+```mermaid title="Auth flow"        ← caption + aria-label
+```mermaid render=false             ← keep it as a code block (today's behavior)
+```mermaid page=landscape           ← force this diagram onto a landscape page
+```mermaid page=portrait            ← veto auto-landscape for this diagram
+```
+
+A ` ```excalidraw ` fence contains a full .excalidraw scene file (what
+excalidraw.com saves). Authoring NEW diagrams from English is `/diagram`'s
+job — it emits an editable triplet (source, .excalidraw, SVG/PNG) and pairs
+with this skill: embed the `.mmd` source in your markdown, not the PNG.
+
+### Images — scaled right, never truncated
+
+Local images inline automatically (relative paths resolve against the
+markdown file). Every image caps at the content box — zero truncation, ever.
+Oversized photos downscale to print resolution (300dpi) so payloads stay
+small with no visible quality loss.
+
+Remote (http/https) images are **blocked with a visible placeholder** by
+default — offline posture; pass `--allow-network` to fetch them. An image
+that resolves outside the markdown's directory (even via symlink) still
+inlines, but warns loudly; `--strict` makes it fatal. Files over 64MB or
+non-regular files (fifos, devices) degrade to a placeholder instead of
+hanging the run.
+
+Per-image directives, written immediately after the image:
+
+```
+![chart](data.png){width=full}      ← stretch to content-box width
+![chart](data.png){width=50%}       ← percentage or 3in/8cm/200px
+![wide](arch.png){page=landscape}   ← give it its own landscape page
+![wide](shot.png){page=portrait}    ← veto auto-landscape
+```
+
+Wide, small-text diagram images auto-promote to their own landscape page
+(conservative: aspect ≥ 1.8, width over ~2.5x the content box, AND a
+diagram-ish alt word — diagram/architecture/flowchart/chart/graph). The
+promoted page is vertically centered. When the heuristic guesses wrong,
+`{page=portrait}` vetoes it; false negatives just need `{page=landscape}`.
+
+### Other formats — single-file HTML and Word
+
+```bash
+$P generate readme.md out.html --to html    # ONE self-contained file: inline
+                                            # SVG diagrams, data-URI images,
+                                            # zero network refs, screen-readable
+$P generate readme.md out.docx --to docx    # Word: content fidelity (headings,
+                                            # tables, code, diagrams as PNG) —
+                                            # layout is Word's, not ours
+```
+
+`--to` is the output format. `--format` is something else entirely (a
+`--page-size` alias) — don't confuse them.
+
+### CI mode — fail loud on missing assets
+
+```bash
+$P generate docs.md --strict     # missing, remote, out-of-tree, oversized,
+                                 # and non-regular-file images exit non-zero
+                                 # instead of warn + placeholder
+```
+
 ## Common flags
 
 ```
@@ -607,6 +740,10 @@ Branding:
   --no-confidential          Suppress the CONFIDENTIAL right-footer
 
 Output:
+  --to pdf|html|docx         Output format (default: pdf). html = single
+                             self-contained file; docx = content fidelity.
+  --strict                   Missing, remote, out-of-tree, oversized, or
+                             non-regular-file images fail the run (CI mode).
   --page-numbers             "N of M" footer (default on)
   --tagged                   Accessible PDF (default on)
   --outline                  PDF bookmarks from headings (default on)
@@ -614,8 +751,9 @@ Output:
   --verbose                  Per-stage timings
 
 Network:
-  --allow-network            Fetch external images. Off by default
-                             (blocks tracking pixels).
+  --allow-network            Fetch external images. Off by default: remote
+                             images render as a visible blocked placeholder
+                             (no tracking pixels fetch at print time).
 
 Metadata:
   --title "..."              Document title (defaults to first H1)
@@ -643,8 +781,9 @@ If the user has a `.md` file open and says "make it look nice", propose
   `--no-syntax` once that flag exists. For now, remove fenced code blocks
   and regenerate.
 - Paged.js timeout → probably no headings in the markdown. Drop `--toc`.
-- External image missing → add `--allow-network` (understand you're giving
-  the markdown file permission to fetch from its image URLs).
+- "[remote image blocked]" placeholder in the output → add `--allow-network`
+  (understand you're giving the markdown file permission to fetch from its
+  image URLs).
 - Generated PDF too tall/wide → `--page-size a4` or `--margins 0.75in`.
 
 ## Output contract
