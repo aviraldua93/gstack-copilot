@@ -1,10 +1,12 @@
 ---
-name: setup-browser-cookies
+name: diagram
 description: |
-  Import cookies from your real Chromium browser into the headless browse session.
-  Opens an interactive picker UI where you select which cookie domains to import.
-  Use before QA testing authenticated pages. Use when asked to "import cookies",
-  "login to the site", or "authenticate the browser". (gstack)
+  Turn an English description (or mermaid source) into a diagram triplet:
+  the source, an editable .excalidraw file you can open on excalidraw.com,
+  and rendered SVG + PNG. The SVG/PNG use clean mermaid style; the
+  .excalidraw carries the hand-drawn aesthetic. Fully offline.
+  Use when asked to "make a diagram", "draw the architecture", "create a
+  flowchart", "diagram this", or "visualize this flow". (gstack)
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run gen:skill-docs -->
@@ -20,7 +22,7 @@ GSTACK_BROWSE="$GSTACK_ROOT/browse/dist"
 GSTACK_DESIGN="$GSTACK_ROOT/design/dist"
 _SS="$GSTACK_BIN/gstack-skill-start"
 [ -x "$_SS" ] || _SS=".copilot/skills/gstack/bin/gstack-skill-start"
-"$_SS" --skill "setup-browser-cookies" --model "claude" --parent-pid "$PPID" \
+"$_SS" --skill "diagram" --model "claude" --parent-pid "$PPID" \
   || echo "SKILL_START: unavailable — stale install; run ./setup or /gstack-upgrade (preamble degraded, continue the user's task)"
 ```
 
@@ -129,7 +131,7 @@ preamble's skill-start output echoed. It also drains the artifacts-sync queue
 `~/.gstack/analytics/`, matching preamble analytics writes.
 
 ```bash
-$GSTACK_BIN/gstack-skill-end --skill "setup-browser-cookies" --outcome OUTCOME \
+$GSTACK_BIN/gstack-skill-end --skill "diagram" --outcome OUTCOME \
   --session-id "SESSION_ID" --tel-start "TEL_START" --used-browse USED_BROWSE \
   --error-message "ERROR_MESSAGE" --failed-step "FAILED_STEP" 2>/dev/null || true
 ```
@@ -143,110 +145,127 @@ telemetry — it never blocks the workflow.
 
 Skills that run plan reviews (`/plan-*-review`, `/codex review`) include the EXIT PLAN MODE GATE blocking checklist at the end of the skill, which verifies the plan file ends with `## GSTACK REVIEW REPORT` before ExitPlanMode is called. Skills that don't run plan reviews (operational skills like `/ship`, `/qa`, `/review`) typically don't operate in plan mode and have no review report to verify; this footer is a no-op for them. Writing the plan file is the one edit allowed in plan mode.
 
-# Setup Browser Cookies
+# /diagram — English in, editable diagram out
 
-Import logged-in sessions from your real Chromium browser into the headless browse session.
+Every run emits a **triplet**, never a dead pixel dump:
 
-## CDP mode check
+| Artifact | What it's for |
+|---|---|
+| `<slug>.mmd` | the mermaid source — the LLM-friendly interchange format |
+| `<slug>.excalidraw` | editable scene — open it at excalidraw.com, move a box, keep working |
+| `<slug>.svg` + `<slug>.png` | crisp vector for docs + raster for chat/issues/READMEs |
 
-First, check if browse is already connected to the user's real browser:
-```bash
-$B status 2>/dev/null | grep -q "Mode: cdp" && echo "CDP_MODE=true" || echo "CDP_MODE=false"
-```
-If `CDP_MODE=true`: tell the user "Not needed — you're connected to your real browser via CDP. Your cookies and sessions are already available." and stop. No cookie import needed.
+Rendering is fully offline via the diagram-render bundle in the browse daemon
+(`lib/diagram-render/dist/diagram-render.html`). No CDN, no network.
 
-## How it works
+## Step 1 — Author the diagram
 
-1. Find the browse binary
-2. Run `cookie-import-browser` to detect installed browsers and open the picker UI
-3. User selects which cookie domains to import in their browser
-4. Cookies are decrypted and loaded into the Playwright session
+Write mermaid for the user's request. Rules:
 
-## Steps
+- **Flowcharts (`graph LR`/`graph TD`)** are the sweet spot: they convert to a
+  fully editable excalidraw scene. Prefer `graph LR` for pipelines/flows,
+  `graph TD` for hierarchies.
+- Sequence, state, gantt, and other mermaid types render to SVG/PNG fine, but
+  the official converter only supports flowcharts — for those types the
+  `.excalidraw` artifact is skipped and you MUST tell the user:
+  "sequence diagrams render but aren't excalidraw-editable yet (upstream
+  converter limitation — flowcharts are)."
+- Keep node labels short; put detail in edge labels. 5-15 nodes is the
+  readable range. If the user's ask needs more, split into multiple diagrams
+  and say why.
 
-### 1. Find the browse binary
+Decide the output directory: `./diagrams/` when the cwd is a git repo
+(artifacts the user can commit), else `/tmp/gstack-diagrams/`. Derive
+`<slug>` from the diagram's subject (kebab-case, ≤40 chars).
 
-## SETUP (run this check BEFORE any browse command)
+## Step 2 — Stage the render bundle (once per session)
 
-```bash
-_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-B=""
-[ -n "$_ROOT" ] && [ -x "$_ROOT/.copilot/skills/gstack/browse/dist/browse" ] && B="$_ROOT/.copilot/skills/gstack/browse/dist/browse"
-[ -z "$B" ] && B="$GSTACK_BROWSE/browse"
-if [ -x "$B" ]; then
-  echo "READY: $B"
-else
-  echo "NEEDS_SETUP"
-fi
-```
-
-If `NEEDS_SETUP`:
-1. Tell the user: "gstack browse needs a one-time build (~10 seconds). OK to proceed?" Then STOP and wait.
-2. Run: `cd <SKILL_DIR> && ./setup`
-3. If `bun` is not installed:
-   ```bash
-   if ! command -v bun >/dev/null 2>&1; then
-     BUN_VERSION="1.3.10"
-     BUN_INSTALL_SHA="bab8acfb046aac8c72407bdcce903957665d655d7acaa3e11c7c4616beae68dd"
-     tmpfile=$(mktemp)
-     curl -fsSL "https://bun.sh/install" -o "$tmpfile"
-     # shasum is macOS/perl; coreutils-only Linux ships sha256sum instead —
-     # resolve whichever exists so the verify never fails on a missing tool.
-     if command -v sha256sum >/dev/null 2>&1; then
-       actual_sha=$(sha256sum "$tmpfile" | awk '{print $1}')
-     else
-       actual_sha=$(shasum -a 256 "$tmpfile" | awk '{print $1}')
-     fi
-     if [ "$actual_sha" != "$BUN_INSTALL_SHA" ]; then
-       echo "ERROR: bun install script checksum mismatch" >&2
-       echo "  expected: $BUN_INSTALL_SHA" >&2
-       echo "  got:      $actual_sha" >&2
-       rm "$tmpfile"; exit 1
-     fi
-     BUN_VERSION="$BUN_VERSION" bash "$tmpfile"
-     rm "$tmpfile"
-   fi
-   ```
-
-### 2. Open the cookie picker
+The staged copy is content-addressed (same convention as make-pdf's pre-pass),
+so concurrent sessions and mixed gstack versions never clobber each other:
 
 ```bash
-$B cookie-import-browser
+BUNDLE=""
+for c in "$HOME/.copilot/skills/gstack/lib/diagram-render/dist/diagram-render.html" \
+         "$(git rev-parse --show-toplevel 2>/dev/null)/lib/diagram-render/dist/diagram-render.html"; do
+  [ -f "$c" ] && BUNDLE="$c" && break
+done
+[ -z "$BUNDLE" ] && echo "BUNDLE_MISSING — run: cd ~/.copilot/skills/gstack && bun run build:diagram-render" && exit 1
+SHA=$(shasum -a 256 "$BUNDLE" | cut -c1-16)
+STAGED="/tmp/gstack-diagram-render-$SHA.html"
+[ -f "$STAGED" ] && shasum -a 256 "$STAGED" | grep -q "^$SHA" || { cp "$BUNDLE" "$STAGED.$$" && mv "$STAGED.$$" "$STAGED"; }
+TAB=$($B newtab --json | sed -n 's/.*"tabId":\s*\([0-9]*\).*/\1/p')
+[ -z "$TAB" ] && echo "TAB_OPEN_FAILED — daemon busy? check browse status" && exit 1
+$B load-html "$STAGED" --tab-id "$TAB"
+$B wait '#done' --tab-id "$TAB"
+echo "RENDER_TAB_READY: tab $TAB"
 ```
 
-This auto-detects installed Chromium browsers and opens
-an interactive picker UI in your default browser where you can:
-- Switch between installed browsers
-- Search domains
-- Click "+" to import a domain's cookies
-- Click trash to remove imported cookies
+Remember `$TAB` — **every** `$B js` / `$B wait` / `$B closetab` below MUST pass
+`--tab-id $TAB`. Without it, calls hit whatever tab is active, which may be a
+live /qa or /scrape session sharing the daemon.
 
-Tell the user: **"Cookie picker opened — select the domains you want to import in your browser, then tell me when you're done."**
+If `BUNDLE_MISSING`: stop and show the user the build command. Do not improvise
+a CDN fallback — offline is the contract.
 
-### 3. Direct import (alternative)
+## Step 3 — Render the triplet
 
-If the user specifies a domain directly (e.g., `/setup-browser-cookies github.com`), skip the UI:
+Write the mermaid source to `<outdir>/<slug>.mmd` first (Write tool). The page
+cannot read files itself, so ship the source in via **base64** — never splice
+file contents into a JS template literal (backticks, `${`, and backslashes in
+the source would be interpreted and corrupt it):
 
 ```bash
-$B cookie-import-browser comet --domain github.com
+# SVG (always). atob() decodes the base64 inside the page.
+$B js --tab-id "$TAB" "window.__renderMermaid('diagram-1', atob('$(base64 < <outdir>/<slug>.mmd | tr -d '\n')')).then(s => { window.__svg = s; return 'SVG OK ' + s.length })"
+$B js --tab-id "$TAB" "window.__svg" --out <outdir>/<slug>.svg
+
+# PNG at 300dpi of a 6.5in placement (1950px)
+$B js --tab-id "$TAB" "window.__rasterize(window.__svg, 1950)" --out <outdir>/<slug>.png
+
+# Editable scene (flowcharts only)
+$B js --tab-id "$TAB" "window.__mermaidToExcalidraw(atob('$(base64 < <outdir>/<slug>.mmd | tr -d '\n')')).then(j => { window.__scene = j; return 'SCENE OK ' + JSON.parse(j).elements.length + ' elements' })"
+$B js --tab-id "$TAB" "window.__scene" --out <outdir>/<slug>.excalidraw
 ```
 
-Replace `comet` with the appropriate browser if specified.
+Note: `atob()` yields Latin-1; for sources with non-ASCII labels use
+`decodeURIComponent(escape(atob('…')))` to recover UTF-8 exactly.
 
-### 4. Verify
+If the mermaid render returns an error, show the parse error to the user, fix
+the mermaid, and retry — do not hand the user a broken source file. If
+`__mermaidToExcalidraw` fails on a non-flowchart type, skip the `.excalidraw`
+artifact and deliver the rest with the limitation note from Step 1.
 
-After the user confirms they're done:
+## Step 4 — Show and deliver
+
+1. Read the PNG with the Read tool so the user sees the diagram inline.
+2. List the triplet paths.
+3. One-line editability note: "The `.excalidraw` file opens at excalidraw.com
+   (File → Open) — edit it there and I can re-render from the edited scene."
+4. If the user wants changes, edit the `.mmd` source and re-run Step 3 — the
+   source is the single source of truth.
+
+Re-rendering an EDITED `.excalidraw` (user round-trip): load the scene file
+and export without touching the mermaid — base64 transport again, since scene
+JSON is full of quotes and backslashes:
 
 ```bash
-$B cookies
+$B js --tab-id "$TAB" "window.__excalidrawToSvg(atob('$(base64 < <outdir>/<slug>.excalidraw | tr -d '\n')')).then(s => { window.__svg = s; return 'OK' })"
+$B js --tab-id "$TAB" "window.__svg" --out <outdir>/<slug>.svg
+$B js --tab-id "$TAB" "window.__rasterize(window.__svg, 1950)" --out <outdir>/<slug>.png
 ```
 
-Show the user a summary of imported cookies (domain counts).
+## Rules
 
-## Notes
+- **Never ship the triplet without rendering it.** A `.mmd` file alone is not
+  a diagram. If rendering is impossible (bundle missing, browse down), say so
+  and stop.
+- **Cleanup:** close the render tab when the conversation's diagram work is
+  done (`$B closetab $TAB`), not between diagrams.
+- For diagrams destined for a PDF: remind the user that `make-pdf` renders
+  ` ```mermaid ` fences natively — embedding the `.mmd` in their markdown is
+  better than embedding the PNG.
 
-- On macOS, the first import per browser may trigger a Keychain dialog — click "Allow" / "Always Allow"
-- On Linux, `v11` cookies may require `secret-tool`/libsecret access; `v10` cookies use Chromium's standard fallback key
-- Cookie picker is served on the same port as the browse server (no extra process)
-- Only domain names and cookie counts are shown in the UI — no cookie values are exposed
-- The browse session persists cookies between commands, so imported cookies work immediately
+## Completion status
+
+- DONE — triplet (or SVG/PNG pair + limitation note) delivered and shown.
+- BLOCKED — bundle or browse unavailable; build/setup command surfaced.

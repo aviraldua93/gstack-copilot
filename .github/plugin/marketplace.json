@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Garry Tan's gstack engineering workflow ported to GitHub Copilot CLI. 53 skills — full CEO/Eng/Design/QA/Release/Safety/iOS workflow, auto-generated via gstack's official hosts/copilot.ts adapter.",
-    "version": "0.3.1+gstack.1.57.9.0",
+    "version": "0.3.2+gstack.1.76.0.0",
     "pluginRoot": "./plugins"
   },
   "plugins": [
@@ -14,7 +14,7 @@
       "name": "gstack",
       "source": "gstack",
       "description": "Opinionated CEO/Eng/Design/QA/Release engineering workflow as Copilot CLI skills. 53 skills covering planning (CEO/Eng/Design/DevEx reviews), implementation (review, investigate, codex), browser QA (qa, design-review, browse, canary, scrape), iOS QA, release (ship, land-and-deploy, retro, health), safety (careful, freeze, guard), and operational memory (learn, context-save). Auto-generated via gstack's hosts/copilot.ts adapter.",
-      "version": "0.3.1+gstack.1.57.9.0",
+      "version": "0.3.2+gstack.1.76.0.0",
       "author": {
         "name": "Aviral Dua (port)",
         "email": "aviraldua@microsoft.com",
