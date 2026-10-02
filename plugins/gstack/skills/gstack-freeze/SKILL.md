@@ -18,8 +18,9 @@ Lock file edits to a specific directory. Any Edit or Write operation targeting
 a file outside the allowed path will be **blocked** (not just warned).
 
 ```bash
-mkdir -p ~/.gstack/analytics
-echo '{"skill":"freeze","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
+eval "$(~/.copilot/skills/gstack/bin/gstack-paths)"; : "${GSTACK_STATE_ROOT:?gstack-paths failed; reinstall with ./setup or /gstack-upgrade}"
+mkdir -p "$GSTACK_STATE_ROOT"/analytics
+echo '{"skill":"freeze","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}'  >> "$GSTACK_STATE_ROOT"/analytics/skill-usage.jsonl 2>/dev/null || true
 ```
 
 ## Setup
@@ -31,38 +32,39 @@ Ask the user which directory to restrict edits to. Use AskUserQuestion:
 
 Once the user provides a directory path:
 
-1. Resolve it to an absolute path:
+Set the user-selected boundary with the shared state writer. It resolves the physical absolute path and serializes replacement with investigation cleanup:
 ```bash
-FREEZE_DIR=$(cd "<user-provided-path>" 2>/dev/null && pwd)
-echo "$FREEZE_DIR"
+bash "$HOME/.copilot/skills/gstack/freeze/bin/freeze-state.sh" set "<user-provided-path>"
 ```
 
-2. Ensure trailing slash and save to the freeze state file:
-```bash
-FREEZE_DIR="${FREEZE_DIR%/}/"
-eval "$(~/.copilot/skills/gstack/bin/gstack-paths)"
-STATE_DIR="$GSTACK_STATE_ROOT"
-mkdir -p "$STATE_DIR"
-echo "$FREEZE_DIR" > "$STATE_DIR/freeze-dir.txt"
-echo "Freeze boundary set: $FREEZE_DIR"
-```
+Only report success if the helper succeeds. On `FREEZE_BUSY` or unexpected state, preserve it and ask the user to inspect recovery after any active writer finishes; never write or delete the state file directly.
 
 Tell the user: "Edits are now restricted to `<path>/`. Any Edit or Write
 outside this directory will be blocked. To change the boundary, run `/freeze`
-again. To remove it, run `/unfreeze` or end the session."
+again. To remove it, run `/unfreeze`."
 
 ## How it works
 
-The hook reads `file_path` from the Edit/Write tool input JSON, then checks
-whether the path starts with the freeze directory. If not, it returns
-`permissionDecision: "deny"` to block the operation.
+The hook reads `file_path` from the Edit/Write tool input JSON (shared
+real-JSON extractor with /careful — one copy, sourced by both hooks), then
+checks whether the path starts with the freeze directory. If not, it returns a
+`hookSpecificOutput` payload with `permissionDecision: "deny"` to block the
+operation (nested under `hookSpecificOutput` — Claude Code ignores a top-level
+`permissionDecision`).
 
-The freeze boundary persists for the session via the state file. The hook
-script reads it on every Edit/Write invocation.
+Polarity is fail-closed: a tool payload the hook cannot parse is DENIED, not
+allowed — a boundary that fails open is not a boundary. A payload that parses
+but has no `file_path` (a non-file tool) is allowed. Symlinks are resolved
+through their FINAL component, so an in-boundary symlink pointing outside the
+boundary is checked against its target.
+
+The freeze boundary persists until explicitly removed via the state file. The hook
+script reads it on every Edit/Write invocation. Boundaries containing spaces
+are supported.
 
 ## Notes
 
 - The trailing `/` on the freeze directory prevents `/src` from matching `/src-old`
 - Freeze applies to Edit and Write tools only — Read, Bash, Glob, Grep are unaffected
 - This prevents accidental edits, not a security boundary — Bash commands like `sed` can still modify files outside the boundary
-- To deactivate, run `/unfreeze` or end the conversation
+- To deactivate, run `/unfreeze`; ending or killing a conversation does not remove persisted state
