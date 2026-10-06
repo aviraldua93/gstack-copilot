@@ -9,7 +9,7 @@ description: |
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run gen:skill-docs -->
-> **Safety Advisory:** This skill includes safety checks that check bash commands for destructive operations (rm -rf, DROP TABLE, force-push, git reset --hard, etc.) before execution. When using this skill, always pause and verify before executing potentially destructive operations. If uncertain about a command's safety, ask the user for confirmation before proceeding.
+> **Safety Advisory — not enforced on GitHub Copilot CLI:** advisory, not blocked. GitHub Copilot CLI runs no gstack safety hooks, so nothing stops a command automatically. On Claude Code this skill's hooks check bash commands for destructive operations (rm -rf, DROP TABLE, force-push, git reset --hard, etc.) before execution; here, do those checks yourself: always pause and verify before executing potentially destructive operations. If uncertain about a command's safety, ask the user for confirmation before proceeding.
 
 
 # /careful — Destructive Command Guardrails
@@ -19,8 +19,9 @@ patterns before running. If a destructive command is detected, you'll be warned
 and can choose to proceed or cancel.
 
 ```bash
-mkdir -p ~/.gstack/analytics
-echo '{"skill":"careful","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
+GSTACK_STATE_ROOT=$(~/.copilot/skills/gstack/bin/gstack-paths --get GSTACK_STATE_ROOT); : "${GSTACK_STATE_ROOT:?gstack-paths failed; reinstall with ./setup or /gstack-upgrade}"
+mkdir -p "$GSTACK_STATE_ROOT"/analytics
+echo '{"skill":"careful","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}'  >> "$GSTACK_STATE_ROOT"/analytics/skill-usage.jsonl 2>/dev/null || true
 ```
 
 ## What's protected
@@ -44,7 +45,27 @@ These patterns are allowed without warning:
 ## How it works
 
 The hook reads the command from the tool input JSON, checks it against the
-patterns above, and returns `permissionDecision: "ask"` with a warning message
-if a match is found. You can always override the warning and proceed.
+patterns above, and returns a `hookSpecificOutput` payload with
+`permissionDecision: "ask"` and a warning reason if a match is found (the
+decision must be nested under `hookSpecificOutput` — Claude Code ignores a
+top-level `permissionDecision`). You can always override a MEDIUM warning and
+proceed.
+
+## HIGH tier (hard deny)
+
+Two catastrophic shapes are **denied**, not asked: `rm -r`/`-R` of exactly
+`/`, `~`, or `$HOME`, and force-push to the repo's **default branch**. SIMPLE
+commands only (no `;`, `&&`, `||`, `|`, newline) — compound shapes fall
+through to the MEDIUM ask; `--force-with-lease` is never HIGH. A best-effort
+advisory hard-stop, not a policy boundary: the escape hatch is ending the
+opt-in, session-scoped /careful session.
+
+## Project patterns (additive only)
+
+Add warn rules — one POSIX ERE per line, `#` comments OK — in
+`~/.gstack/careful-patterns.txt` (global) or
+`~/.gstack/projects/<slug>/careful-patterns.txt` (per-project). Consulted
+after the built-in families, so config can only ADD rules, never suppress a
+baseline warning. Invalid regex lines are skipped.
 
 To deactivate, end the conversation or start a new one. Hooks are session-scoped.
