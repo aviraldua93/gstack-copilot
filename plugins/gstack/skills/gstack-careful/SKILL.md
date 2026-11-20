@@ -9,42 +9,89 @@ description: |
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run gen:skill-docs -->
-> **Safety Advisory:** This skill includes safety checks that check bash commands for destructive operations (rm -rf, DROP TABLE, force-push, git reset --hard, etc.) before execution. When using this skill, always pause and verify before executing potentially destructive operations. If uncertain about a command's safety, ask the user for confirmation before proceeding.
+> **Safety Advisory — not enforced on GitHub Copilot CLI:** advisory, not blocked. GitHub Copilot CLI runs no gstack safety hooks, so nothing stops a command automatically. On Claude Code this skill's hooks check bash commands for destructive operations (rm -rf, DROP TABLE, force-push, git reset --hard, etc.) before execution, and check PowerShell operations for safety; here, do those checks yourself: always pause and verify before executing potentially destructive operations. If uncertain about a command's safety, ask the user for confirmation before proceeding.
 
 
 # /careful — Destructive Command Guardrails
 
-Safety mode is now **active**. Every bash command will be checked for destructive
-patterns before running. If a destructive command is detected, you'll be warned
+Safety mode is now **active**. Every Bash and PowerShell command will be checked
+for destructive patterns before running. If a destructive command is detected, you'll be warned
 and can choose to proceed or cancel.
 
 ```bash
-mkdir -p ~/.gstack/analytics
-echo '{"skill":"careful","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
+GSTACK_STATE_ROOT=$(~/.copilot/skills/gstack/bin/gstack-paths --get GSTACK_STATE_ROOT); : "${GSTACK_STATE_ROOT:?gstack-paths failed; reinstall with ./setup or /gstack-upgrade}"
+mkdir -p "$GSTACK_STATE_ROOT"/analytics
+echo '{"skill":"careful","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}'  >> "$GSTACK_STATE_ROOT"/analytics/skill-usage.jsonl 2>/dev/null || true
 ```
 
 ## What's protected
 
-| Pattern | Example | Risk |
-|---------|---------|------|
-| `rm -rf` / `rm -r` / `rm --recursive` | `rm -rf /var/data` | Recursive delete |
-| `DROP TABLE` / `DROP DATABASE` | `DROP TABLE users;` | Data loss |
-| `TRUNCATE` | `TRUNCATE orders;` | Data loss |
-| `git push --force` / `-f` | `git push -f origin main` | History rewrite |
-| `git reset --hard` | `git reset --hard HEAD~3` | Uncommitted work loss |
-| `git checkout .` / `git restore .` | `git checkout .` | Uncommitted work loss |
-| `kubectl delete` | `kubectl delete pod` | Production impact |
-| `docker rm -f` / `docker system prune` | `docker system prune -a` | Container/image loss |
+Each command in a chain is checked on its own (after `&&`, `sudo`, `xargs`,
+inside `bash -c`).
+
+| Asks before | Example |
+|-------------|---------|
+| `rm -r` of anything but scratch (see below) | `rm -rf /var/data` |
+| Deleting outside the session folder: `rm`, find's delete actions, `rsync --delete`, `shred`, `unlink` | `rm -f ~/notes.txt` |
+| `DROP TABLE`/`DATABASE` through a SQL client; SQL `TRUNCATE` | `psql -c "DROP TABLE users"` |
+| Force-push (`-f`, `+ref`, `--force-with-lease`); remote branch delete | `git push -f origin feature` |
+| `reset --hard`, `checkout -f`/`-- paths`, `restore`, `clean -f` when there is work to lose; `stash drop`, `worktree remove --force` | `git clean -fdx` |
+| History rewrites (`filter-branch`, BFG, `reflog expire --expire=now`) | |
+| Database resets (`prisma migrate reset`, `dropdb`, `FLUSHALL`, `DELETE FROM` with no `WHERE`) | |
+| Cloud deletes (`terraform destroy`, `aws`/`gcloud`/`az` delete; not dry runs) | |
+| `kubectl delete`, `docker rm -f`, `docker system prune` | |
+
+## PowerShell and cmd (Windows)
+
+The hook also checks the PowerShell tool (Claude Code's main Windows shell)
+and any `pwsh`/`powershell`/`cmd` launched from Bash. Matching ignores case,
+covers aliases in command position, accepts parameter prefixes (`-r`, `-fo`)
+and strips cmd `^` escapes. All rows above apply there too.
+
+| Pattern | Example |
+|---------|---------|
+| `Remove-Item`/`rm`/`ri`/`del`/`erase`/`rd`/`rmdir` + `-Recurse` or `-Force` | `gci \| ri -r -fo` |
+| cmd `rd /s`, `rmdir /s`, `del /s`, `erase /s` | `cmd /c rd /s /q C:\proj` |
+| `Format-Volume`, `Clear-Disk`, `Clear-Content`, `[IO.Directory]::Delete`, `[IO.File]::Delete` | `Clear-Disk -Number 1` |
+| `-EncodedCommand`, `iex`, `Start-Process` of a shell, `& $cmd` (can't be inspected) | `irm $url \| iex` |
+
+**Best-effort on PowerShell.** String matching can't see a command built at
+runtime. For a hard stop, add Claude Code permission deny rules, which parse
+PowerShell and its aliases: `"deny": ["PowerShell(Remove-Item *)"]` in
+`.claude/settings.json`. The hook runs through `bash`, so Windows needs Git Bash.
 
 ## Safe exceptions
 
-These patterns are allowed without warning:
-- `rm -rf node_modules` / `.next` / `dist` / `__pycache__` / `.cache` / `build` / `.turbo` / `coverage`
+A recursive delete never asks when every target is scratch: under `/tmp/` or
+`/var/tmp/`, a `$(mktemp)` variable, a relative path after `cd` into scratch, a
+cache (`~/.cache`, `~/.npm` and the like), or a build artifact
+(`node_modules`, `dist`, `build`, `.next`, `.venv` and the like). A path containing `..` is never scratch.
 
 ## How it works
 
-The hook reads the command from the tool input JSON, checks it against the
-patterns above, and returns `permissionDecision: "ask"` with a warning message
-if a match is found. You can always override the warning and proceed.
+The hook checks each command against the patterns above and returns
+`permissionDecision: "ask"` (nested under `hookSpecificOutput`) with a reason.
+You can always approve an ask and proceed.
 
-To deactivate, end the conversation or start a new one. Hooks are session-scoped.
+## HIGH tier (hard deny)
+
+**Denied**, not asked: a recursive delete of `/`, `~`, a system folder or
+`~/.ssh`-style personal folder; a force-push to `main`, `master` or the
+**default branch** (`--force-with-lease` is never HIGH); a disk wipe
+(`dd of=/dev/sda`, `mkfs`). Best-effort, not a policy boundary: you can still
+run the command yourself.
+
+## Project patterns (additive only)
+
+Add warn rules — one POSIX ERE per line, `#` comments OK — in
+`~/.gstack/careful-patterns.txt` (global) or
+`~/.gstack/projects/<slug>/careful-patterns.txt` (per-project). Consulted
+after the built-in families, so config can only ADD rules, never suppress a
+baseline warning. Invalid regex lines are skipped.
+
+## Always on
+
+`./setup` registers this check for every session (`destructive_guard`), so it
+runs even when /careful is never loaded; /guard still adds the edit boundary.
+Turn it off with `gstack-config set destructive_guard off`; /careful's own
+hooks then last until the conversation ends.
